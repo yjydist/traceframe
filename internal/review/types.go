@@ -85,6 +85,7 @@ type Baseline struct {
 	ProjectRevision   int64           `json:"project_revision"`
 	Checksum          string          `json:"checksum"`
 	Snapshot          json.RawMessage `json:"snapshot,omitempty"`
+	RoutedConcerns    []string        `json:"routed_concerns"`
 	ApprovalActor     string          `json:"approval_actor"`
 	ApprovalRationale string          `json:"approval_rationale"`
 	ApprovedAt        time.Time       `json:"approved_at"`

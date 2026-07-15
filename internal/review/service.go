@@ -12,13 +12,24 @@ import (
 )
 
 type Service struct {
-	projects *application.ProjectService
-	store    Store
-	now      func() time.Time
+	projects  *application.ProjectService
+	store     Store
+	artifacts interface {
+		CurrentMandatoryViews(context.Context, string, int64) (bool, []string, error)
+		RoutedConcernNames(context.Context, string) ([]string, error)
+	}
+	now func() time.Time
 }
 
 func NewService(projects *application.ProjectService, store Store) *Service {
 	return &Service{projects: projects, store: store, now: time.Now}
+}
+
+func (s *Service) SetArtifactReadiness(checker interface {
+	CurrentMandatoryViews(context.Context, string, int64) (bool, []string, error)
+	RoutedConcernNames(context.Context, string) ([]string, error)
+}) {
+	s.artifacts = checker
 }
 
 func (s *Service) SubmitFindings(ctx context.Context, projectID, runID string, baseRevision int64, drafts []FindingDraft) error {
@@ -132,6 +143,17 @@ func (s *Service) Readiness(ctx context.Context, projectID string) (Readiness, e
 		{Code: "delivery_completion", Passed: slicesComplete(snapshot), Message: "Every work slice has completion conditions and verification references."},
 		{Code: "active_conflicts", Passed: noActiveConflicts(snapshot), Message: "No active model contradiction remains."},
 	}
+	if s.artifacts != nil {
+		current, missing, err := s.artifacts.CurrentMandatoryViews(ctx, projectID, snapshot.Project.Revision)
+		if err != nil {
+			return Readiness{}, err
+		}
+		message := "All mandatory routed artifact views are current."
+		if len(missing) > 0 {
+			message = "Missing current artifact views: " + strings.Join(missing, ", ") + "."
+		}
+		checks = append(checks, ReadinessCheck{Code: "mandatory_artifacts", Passed: current, Message: message})
+	}
 	ready := snapshot.Project.Stage == domain.StageReview
 	blockers := make([]string, 0)
 	if !ready {
@@ -162,6 +184,12 @@ func (s *Service) CreateBaseline(ctx context.Context, projectID string, request 
 	}
 	now := s.now().UTC()
 	baseline := Baseline{ID: domain.NewID("baseline"), ProjectID: projectID, ProjectRevision: request.ExpectedRevision, ApprovalActor: "user", ApprovalRationale: strings.TrimSpace(request.Rationale), ApprovedAt: now, CreatedAt: now}
+	if s.artifacts != nil {
+		baseline.RoutedConcerns, err = s.artifacts.RoutedConcernNames(ctx, projectID)
+		if err != nil {
+			return Baseline{}, err
+		}
+	}
 	baseline, _, err = s.store.CreateBaseline(ctx, baseline, request.ExpectedRevision)
 	if err != nil {
 		return Baseline{}, err

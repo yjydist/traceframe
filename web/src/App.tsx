@@ -17,6 +17,9 @@ import {
   CheckCircle2,
   ClipboardCheck,
   FileCheck2,
+  Download,
+  Layers3,
+  RefreshCw,
   Scale,
   SlidersHorizontal,
   XCircle,
@@ -42,15 +45,18 @@ import {
   createBaseline,
   listApprovals,
   listBaselines,
+  listArtifacts,
   listReviewFindings,
   resolveApproval,
   resolveReviewFinding,
   getReadiness,
+  renderArtifacts,
   updateProject,
   type Entity,
   type AgentRun,
   type Approval,
   type ReviewFinding,
+  type Artifact,
   type ProjectMode,
 } from "./api";
 
@@ -86,8 +92,8 @@ function AppShell({ children }: { children: ReactNode }) {
   );
 }
 
-function ProjectTabs({ projectID, active }: { projectID: string; active: "model" | "questions" | "decisions" | "reviews" | "runs" }) {
-  return <nav className="project-tabs" aria-label="Project workspace"><Link className={active === "model" ? "active" : ""} to={`/projects/${projectID}/model`}><CircleDot size={16} />Model</Link><Link className={active === "questions" ? "active" : ""} to={`/projects/${projectID}/questions`}><HelpCircle size={16} />Questions</Link><Link className={active === "decisions" ? "active" : ""} to={`/projects/${projectID}/decisions`}><Scale size={16} />Decisions</Link><Link className={active === "reviews" ? "active" : ""} to={`/projects/${projectID}/reviews`}><ClipboardCheck size={16} />Reviews</Link><Link className={active === "runs" ? "active" : ""} to={`/projects/${projectID}/runs`}><ListChecks size={16} />Runs</Link></nav>;
+function ProjectTabs({ projectID, active }: { projectID: string; active: "model" | "questions" | "decisions" | "reviews" | "artifacts" | "runs" }) {
+  return <nav className="project-tabs" aria-label="Project workspace"><Link className={active === "model" ? "active" : ""} to={`/projects/${projectID}/model`}><CircleDot size={16} />Model</Link><Link className={active === "questions" ? "active" : ""} to={`/projects/${projectID}/questions`}><HelpCircle size={16} />Questions</Link><Link className={active === "decisions" ? "active" : ""} to={`/projects/${projectID}/decisions`}><Scale size={16} />Decisions</Link><Link className={active === "reviews" ? "active" : ""} to={`/projects/${projectID}/reviews`}><ClipboardCheck size={16} />Reviews</Link><Link className={active === "artifacts" ? "active" : ""} to={`/projects/${projectID}/artifacts`}><Layers3 size={16} />Artifacts</Link><Link className={active === "runs" ? "active" : ""} to={`/projects/${projectID}/runs`}><ListChecks size={16} />Runs</Link></nav>;
 }
 
 function ProjectList() {
@@ -264,6 +270,22 @@ function ReviewsView() {
   return <AppShell>{snapshot.isPending ? <div className="loading-row">Loading review...</div> : snapshot.isError ? <ErrorBanner message={snapshot.error.message} /> : <><Link className="back-link" to="/projects"><ArrowLeft size={16} />Projects</Link><ProjectTabs projectID={id} active="reviews" /><div className="model-heading"><div><p className="eyebrow">{snapshot.data.project.stage} / revision {snapshot.data.project.revision}</p><h1>Review and readiness</h1><p>{snapshot.data.project.name}</p></div><span className={`readiness-badge ${readiness.data?.ready ? "ready" : "blocked"}`}>{readiness.data?.ready ? "Ready to baseline" : `${readiness.data?.blockers.length ?? 0} blockers`}</span></div>{pageError && <ErrorBanner message={pageError.message} />}<section className="model-section"><div className="section-heading"><div><h2>Readiness checks</h2><p>Deterministic evidence required before an immutable baseline.</p></div></div><div className="readiness-list">{readiness.data?.checks.map((check) => <div className={check.passed ? "passed" : "failed"} key={check.code}>{check.passed ? <CheckCircle2 size={17} /> : <XCircle size={17} />}<div><strong>{check.code.replaceAll("_", " ")}</strong><span>{check.message}</span></div></div>)}</div></section>{riskApprovals.length > 0 && <section className="model-section"><div className="section-heading"><div><h2>Residual risk approvals</h2><p>High residual risk requires an explicit user decision.</p></div></div>{riskApprovals.map((approval) => { const risk = snapshot.data.entities.find((entity) => entity.id === approval.subject_id); return <div className="risk-approval-row" key={approval.id}><div><strong>{risk?.title ?? approval.subject_id}</strong><span>entity r{approval.subject_revision}</span></div><button className="secondary-button" onClick={() => resolveRisk.mutate({ approval, approve: false })}><XCircle size={16} />Reject</button><button className="primary-button" onClick={() => resolveRisk.mutate({ approval, approve: true })}><CheckCircle2 size={16} />Accept risk</button></div>; })}</section>}<section className="model-section"><div className="section-heading"><div><h2>Review findings</h2><p>Blocking findings require resolution or dismissal with counter-evidence.</p></div></div>{(findings.data?.findings.length ?? 0) === 0 ? <div className="section-empty">No review findings recorded.</div> : <div className="finding-list">{findings.data?.findings.map((finding) => { const value = resolutions[finding.id] ?? { status: "resolved", rationale: "", counter: "" }; return <article className="finding-row" key={finding.id}><div className="finding-heading"><div><span className={`severity severity-${finding.severity}`}>{finding.severity}</span><strong>{finding.category}</strong></div><span>{finding.status.replaceAll("_", " ")}</span></div><h3>{finding.claim}</h3><p>{finding.evidence}</p><div className="finding-recommendation"><strong>Resolution</strong><span>{finding.recommended_resolution}</span></div>{finding.status === "open" && <div className="finding-resolution"><select aria-label={`Resolution for ${finding.id}`} value={value.status} onChange={(event) => updateResolution(finding.id, { status: event.target.value })}><option value="resolved">Resolved</option><option value="dismissed">Dismissed</option>{finding.severity !== "blocking" && <option value="risk_accepted">Risk accepted</option>}</select><input aria-label={`Rationale for ${finding.id}`} placeholder="Resolution rationale" value={value.rationale} onChange={(event) => updateResolution(finding.id, { rationale: event.target.value })} />{value.status === "dismissed" && <input aria-label={`Counter evidence for ${finding.id}`} placeholder="Counter-evidence IDs, comma separated" value={value.counter} onChange={(event) => updateResolution(finding.id, { counter: event.target.value })} />}<button className="primary-button" disabled={!value.rationale.trim() || resolveFinding.isPending} onClick={() => resolveFinding.mutate(finding)}>Resolve finding</button></div>}</article>; })}</div>}</section><section className="model-section"><div className="section-heading"><div><h2>Baselines</h2><p>Approved snapshots remain immutable as work continues.</p></div></div>{snapshot.data.project.stage === "REVIEW" && <div className="baseline-control"><label>Approval rationale<input value={baselineRationale} onChange={(event) => setBaselineRationale(event.target.value)} /></label><label className="approval-check"><input type="checkbox" checked={baselineApproved} onChange={(event) => setBaselineApproved(event.target.checked)} />Approve revision {snapshot.data.project.revision} as the implementation baseline</label><button className="primary-button" disabled={!readiness.data?.ready || !baselineApproved || !baselineRationale.trim() || freeze.isPending} onClick={() => freeze.mutate()}><FileCheck2 size={16} />Create baseline</button></div>}{freeze.isError && <ErrorBanner message={freeze.error.message} />}<div className="baseline-list">{baselines.data?.baselines.map((baseline) => <div key={baseline.id}><div><strong>Revision {baseline.project_revision}</strong><code>{baseline.checksum.slice(0, 16)}</code></div><span>{baseline.approval_rationale}</span><time>{new Date(baseline.approved_at).toLocaleString()}</time></div>)}</div>{(baselines.data?.baselines.length ?? 0) === 0 && <div className="section-empty">No baseline created.</div>}</section></>}</AppShell>;
 }
 
+function ArtifactsView() {
+  const { id = "" } = useParams();
+  const queryClient = useQueryClient();
+  const [selectedID, setSelectedID] = useState("");
+  const snapshot = useQuery({ queryKey: ["snapshot", id], queryFn: () => getSnapshot(id), enabled: id !== "" });
+  const artifacts = useQuery({ queryKey: ["artifacts", id], queryFn: () => listArtifacts(id), enabled: id !== "" });
+  const render = useMutation({ mutationFn: () => renderArtifacts(id, snapshot.data!.project.revision), onSuccess: async () => { await Promise.all([queryClient.invalidateQueries({ queryKey: ["artifacts", id] }), queryClient.invalidateQueries({ queryKey: ["readiness", id] })]); } });
+  const artifactList = artifacts.data?.artifacts ?? [];
+  const selected = artifactList.find((artifact) => artifact.id === selectedID) ?? artifactList[0];
+  const grouped = artifactList.reduce<Record<string, Artifact[]>>((result, artifact) => {
+    (result[artifact.view_type] ??= []).push(artifact);
+    return result;
+  }, {});
+  return <AppShell>{snapshot.isPending ? <div className="loading-row">Loading artifacts...</div> : snapshot.isError ? <ErrorBanner message={snapshot.error.message} /> : <><Link className="back-link" to="/projects"><ArrowLeft size={16} />Projects</Link><ProjectTabs projectID={id} active="artifacts" /><div className="model-heading"><div><p className="eyebrow">{snapshot.data.project.stage} / revision {snapshot.data.project.revision}</p><h1>Artifacts</h1><p>{snapshot.data.project.name}</p></div><div className="artifact-actions"><a className="secondary-button" href={`/api/v1/projects/${id}/export?format=json`}><Download size={16} />JSON</a><a className="secondary-button" href={`/api/v1/projects/${id}/export?format=markdown`}><Download size={16} />Markdown</a><button className="primary-button" disabled={render.isPending} onClick={() => render.mutate()}><RefreshCw size={16} />{render.isPending ? "Rendering..." : "Render revision"}</button></div></div>{render.isError && <ErrorBanner message={render.error.message} />}{artifacts.isError && <ErrorBanner message={artifacts.error.message} />}{artifactList.length === 0 ? <section className="empty-state"><div className="empty-icon"><Layers3 size={28} /></div><h2>No artifacts rendered</h2><p>Render the current revision to create routed views.</p></section> : <div className="artifact-workspace"><nav className="artifact-index" aria-label="Artifact views">{Object.entries(grouped).map(([view, versions]) => <div key={view}><strong>{versions[0].title}</strong>{versions.map((artifact) => <button className={selected?.id === artifact.id ? "active" : ""} key={artifact.id} onClick={() => setSelectedID(artifact.id)}><span>{artifact.renderer_type}</span>{artifact.latest?.stale && <em>Stale</em>}</button>)}</div>)}</nav>{selected?.latest && <section className="artifact-preview"><header><div><h2>{selected.title}</h2><span>{selected.renderer_type} v{selected.latest.renderer_version} / source r{selected.latest.source_revision}</span></div><div><code>{selected.latest.checksum.slice(0, 16)}</code>{selected.latest.stale && <strong>Stale source</strong>}</div></header>{selected.renderer_type === "html" ? <iframe title={`${selected.title} preview`} sandbox="" src={`/api/v1/projects/${id}/artifacts/${selected.id}?raw=true`} /> : <pre>{selected.latest.content}</pre>}<footer><span>{selected.latest.included_entity_ids.length} source entities</span><a href={`/api/v1/projects/${id}/artifacts/${selected.id}?raw=true`}><Download size={15} />Download</a></footer></section>}</div>}</>}</AppShell>;
+}
+
 function RunsView() {
   const { id = "" } = useParams();
   const queryClient = useQueryClient();
@@ -367,5 +389,5 @@ function DialogActions({ onClose, pending, label }: { onClose: () => void; pendi
 function ErrorBanner({ message }: { message: string }) { return <div className="error-banner" role="alert">{message}</div>; }
 
 export function App() {
-  return <Routes><Route path="/projects" element={<ProjectList />} /><Route path="/projects/:id/model" element={<ModelView />} /><Route path="/projects/:id/questions" element={<QuestionsView />} /><Route path="/projects/:id/decisions" element={<DecisionsView />} /><Route path="/projects/:id/reviews" element={<ReviewsView />} /><Route path="/projects/:id/runs" element={<RunsView />} /><Route path="*" element={<Navigate to="/projects" replace />} /></Routes>;
+  return <Routes><Route path="/projects" element={<ProjectList />} /><Route path="/projects/:id/model" element={<ModelView />} /><Route path="/projects/:id/questions" element={<QuestionsView />} /><Route path="/projects/:id/decisions" element={<DecisionsView />} /><Route path="/projects/:id/reviews" element={<ReviewsView />} /><Route path="/projects/:id/artifacts" element={<ArtifactsView />} /><Route path="/projects/:id/runs" element={<RunsView />} /><Route path="*" element={<Navigate to="/projects" replace />} /></Routes>;
 }

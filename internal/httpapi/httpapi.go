@@ -12,28 +12,31 @@ import (
 	"time"
 
 	"github.com/yjydist/traceframe/internal/application"
+	artifactmodel "github.com/yjydist/traceframe/internal/artifacts"
 	"github.com/yjydist/traceframe/internal/orchestrator"
 	"github.com/yjydist/traceframe/internal/review"
 	"github.com/yjydist/traceframe/internal/workflow"
 )
 
 type api struct {
-	db       *sql.DB
-	projects *application.ProjectService
-	runs     *orchestrator.Service
-	workflow *workflow.Service
-	reviews  *review.Service
-	logger   *slog.Logger
+	db        *sql.DB
+	projects  *application.ProjectService
+	runs      *orchestrator.Service
+	workflow  *workflow.Service
+	reviews   *review.Service
+	artifacts *artifactmodel.Service
+	logger    *slog.Logger
 }
 
-func New(db *sql.DB, projects *application.ProjectService, runs *orchestrator.Service, workflowService *workflow.Service, reviewService *review.Service, webDir string, logger *slog.Logger) http.Handler {
-	service := &api{db: db, projects: projects, runs: runs, workflow: workflowService, reviews: reviewService, logger: logger}
+func New(db *sql.DB, projects *application.ProjectService, runs *orchestrator.Service, workflowService *workflow.Service, reviewService *review.Service, artifactService *artifactmodel.Service, webDir string, logger *slog.Logger) http.Handler {
+	service := &api{db: db, projects: projects, runs: runs, workflow: workflowService, reviews: reviewService, artifacts: artifactService, logger: logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", service.health)
 	service.registerProjectRoutes(mux)
 	service.registerRunRoutes(mux)
 	service.registerWorkflowRoutes(mux)
 	service.registerReviewRoutes(mux)
+	service.registerArtifactRoutes(mux)
 	mux.Handle("/", spaHandler(webDir, logger))
 	return requestID(requestLogger(mux, logger))
 }

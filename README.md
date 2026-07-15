@@ -38,3 +38,5 @@ Environment variables:
 The adaptive workflow routes discovery, requirements, architecture, quality/risk, and delivery specialists by stage. Significant decisions appear in the Decisions workspace and require approval against the current project and subject revisions before the workflow can advance.
 
 At `REVIEW`, an isolated critic records typed findings without modifying the Project Model. The Reviews workspace enforces deterministic readiness checks and explicit risk, finding, and exact-revision baseline approvals before the project can enter `READY`.
+
+The Artifacts workspace routes only applicable views and versions deterministic HTML, Markdown, JSON, and Mermaid projections with source entity IDs, revision provenance, checksums, and stale-state warnings. Markdown export produces an implementation packet from the latest immutable baseline when one exists.
