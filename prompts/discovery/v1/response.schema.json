@@ -36,9 +36,9 @@
       "required": ["id", "kind", "title", "body", "status", "origin", "confidence", "freshness", "source_refs", "tags"],
       "properties": {
         "id": {"type": "string"},
-        "kind": {"type": "string", "enum": ["goal", "stakeholder", "context", "scope_item", "constraint", "assumption", "question", "term"]},
+        "kind": {"type": "string", "enum": ["goal", "stakeholder", "context", "scope_item", "constraint", "assumption", "question", "term", "scenario", "requirement", "quality_scenario", "risk", "option", "decision", "system_element", "work_slice", "experiment", "verification"]},
         "title": {"type": "string"},
-        "body": {"anyOf": [{"$ref": "#/$defs/goal_body"}, {"$ref": "#/$defs/stakeholder_body"}, {"$ref": "#/$defs/context_body"}, {"$ref": "#/$defs/scope_body"}, {"$ref": "#/$defs/constraint_body"}, {"$ref": "#/$defs/assumption_body"}, {"$ref": "#/$defs/question_body"}, {"$ref": "#/$defs/term_body"}]},
+        "body": {"anyOf": [{"$ref": "#/$defs/goal_body"}, {"$ref": "#/$defs/stakeholder_body"}, {"$ref": "#/$defs/context_body"}, {"$ref": "#/$defs/scope_body"}, {"$ref": "#/$defs/constraint_body"}, {"$ref": "#/$defs/assumption_body"}, {"$ref": "#/$defs/question_body"}, {"$ref": "#/$defs/term_body"}, {"$ref": "#/$defs/scenario_body"}, {"$ref": "#/$defs/requirement_body"}, {"$ref": "#/$defs/quality_scenario_body"}, {"$ref": "#/$defs/risk_body"}, {"$ref": "#/$defs/option_body"}, {"$ref": "#/$defs/decision_body"}, {"$ref": "#/$defs/system_element_body"}, {"$ref": "#/$defs/work_slice_body"}, {"$ref": "#/$defs/experiment_body"}, {"$ref": "#/$defs/verification_body"}]},
         "status": {"type": "string", "enum": ["proposed"]},
         "origin": {"type": "string", "enum": ["agent"]},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
@@ -54,7 +54,7 @@
       "properties": {
         "id": {"type": "string"},
         "from_id": {"type": "string"},
-        "type": {"type": "string", "enum": ["motivates", "affects", "constrains", "assumes", "answers", "derives_from", "satisfies", "mitigates", "depends_on", "conflicts_with", "supersedes", "decomposes", "evidenced_by"]},
+        "type": {"type": "string", "enum": ["motivates", "affects", "constrains", "assumes", "answers", "derives_from", "satisfies", "verifies", "mitigates", "selects", "rejects", "depends_on", "conflicts_with", "supersedes", "implements", "decomposes", "evidenced_by"]},
         "to_id": {"type": "string"},
         "rationale": {"type": "string"}
       }
@@ -156,6 +156,151 @@
         "aliases": {"type": "array", "items": {"type": "string"}},
         "scope": {"type": "string"},
         "source_ref": {"type": ["string", "null"]}
+      }
+    },
+    "scenario_body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor", "trigger", "preconditions", "main_flow", "alternative_flows", "failure_flows", "postconditions", "frequency", "importance"],
+      "properties": {
+        "actor": {"type": "string"},
+        "trigger": {"type": "string"},
+        "preconditions": {"type": "array", "items": {"type": "string"}},
+        "main_flow": {"type": "array", "items": {"type": "string"}},
+        "alternative_flows": {"type": "array", "items": {"type": "string"}},
+        "failure_flows": {"type": "array", "items": {"type": "string"}},
+        "postconditions": {"type": "array", "items": {"type": "string"}},
+        "frequency": {"type": "string"},
+        "importance": {"type": "string"}
+      }
+    },
+    "requirement_body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["statement", "category", "rationale", "acceptance_conditions", "priority", "stability"],
+      "properties": {
+        "statement": {"type": "string"},
+        "category": {"type": "string", "enum": ["functional", "constraint", "interface", "data", "operational"]},
+        "rationale": {"type": "string"},
+        "acceptance_conditions": {"type": "array", "items": {"type": "string"}},
+        "priority": {"type": "string", "enum": ["must", "should", "could"]},
+        "stability": {"type": "string", "enum": ["stable", "evolving", "volatile"]}
+      }
+    },
+    "quality_scenario_body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["characteristic", "source", "stimulus", "environment", "artifact", "response", "measure"],
+      "properties": {
+        "characteristic": {"type": "string"},
+        "source": {"type": "string"},
+        "stimulus": {"type": "string"},
+        "environment": {"type": "string"},
+        "artifact": {"type": "string"},
+        "response": {"type": "string"},
+        "measure": {"type": "string"}
+      }
+    },
+    "risk_body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["category", "cause", "event", "impact", "likelihood", "severity", "mitigation", "evidence_needed", "residual_risk"],
+      "properties": {
+        "category": {"type": "string", "enum": ["value", "usability", "feasibility", "architecture", "security", "privacy", "delivery", "operational", "compliance"]},
+        "cause": {"type": "string"},
+        "event": {"type": "string"},
+        "impact": {"type": "string"},
+        "likelihood": {"type": "string"},
+        "severity": {"type": "string"},
+        "mitigation": {"type": "string"},
+        "evidence_needed": {"type": "array", "items": {"type": "string"}},
+        "residual_risk": {"type": "string"}
+      }
+    },
+    "option_body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision_topic", "description", "benefits", "costs", "risks", "fit_to_constraints", "evidence_refs"],
+      "properties": {
+        "decision_topic": {"type": "string"},
+        "description": {"type": "string"},
+        "benefits": {"type": "array", "items": {"type": "string"}},
+        "costs": {"type": "array", "items": {"type": "string"}},
+        "risks": {"type": "array", "items": {"type": "string"}},
+        "fit_to_constraints": {"type": "array", "items": {"type": "string"}},
+        "evidence_refs": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "decision_body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["question", "selected_option_id", "rationale", "consequences", "alternatives_considered", "revisit_triggers", "significance", "approval_required"],
+      "properties": {
+        "question": {"type": "string"},
+        "selected_option_id": {"type": "string"},
+        "rationale": {"type": "string"},
+        "consequences": {"type": "array", "items": {"type": "string"}},
+        "alternatives_considered": {"type": "array", "items": {"type": "string"}},
+        "revisit_triggers": {"type": "array", "items": {"type": "string"}},
+        "significance": {"type": "string", "enum": ["local", "cross_cutting", "architectural"]},
+        "approval_required": {"type": "boolean"}
+      }
+    },
+    "system_element_body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["element_type", "responsibilities", "boundary", "technology", "lifecycle", "trust_zone"],
+      "properties": {
+        "element_type": {"type": "string", "enum": ["person", "software_system", "container", "component", "interface", "datastore", "external_system"]},
+        "responsibilities": {"type": "array", "items": {"type": "string"}},
+        "boundary": {"type": "string"},
+        "technology": {"type": ["string", "null"]},
+        "lifecycle": {"type": "string"},
+        "trust_zone": {"type": ["string", "null"]}
+      }
+    },
+    "work_slice_body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome", "included", "excluded", "dependencies", "verification_refs", "risk_reduction", "completion_conditions", "order_hint"],
+      "properties": {
+        "outcome": {"type": "string"},
+        "included": {"type": "array", "items": {"type": "string"}},
+        "excluded": {"type": "array", "items": {"type": "string"}},
+        "dependencies": {"type": "array", "items": {"type": "string"}},
+        "verification_refs": {"type": "array", "items": {"type": "string"}},
+        "risk_reduction": {"type": "string"},
+        "completion_conditions": {"type": "array", "items": {"type": "string"}},
+        "order_hint": {"type": "number", "minimum": 0}
+      }
+    },
+    "experiment_body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hypothesis", "decision_criteria", "method", "inputs", "time_box", "safety_constraints", "expected_evidence", "result_evidence_refs", "conclusion"],
+      "properties": {
+        "hypothesis": {"type": "string"},
+        "decision_criteria": {"type": "array", "items": {"type": "string"}},
+        "method": {"type": "string"},
+        "inputs": {"type": "array", "items": {"type": "string"}},
+        "time_box": {"type": "string"},
+        "safety_constraints": {"type": "array", "items": {"type": "string"}},
+        "expected_evidence": {"type": "array", "items": {"type": "string"}},
+        "result_evidence_refs": {"type": "array", "items": {"type": "string"}},
+        "conclusion": {"type": ["string", "null"]}
+      }
+    },
+    "verification_body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_ref", "method", "procedure", "expected_result", "environment", "owner"],
+      "properties": {
+        "target_ref": {"type": "string"},
+        "method": {"type": "string", "enum": ["test", "review", "analysis", "demonstration", "measurement", "experiment"]},
+        "procedure": {"type": "string"},
+        "expected_result": {"type": "string"},
+        "environment": {"type": "string"},
+        "owner": {"type": "string"}
       }
     }
   }

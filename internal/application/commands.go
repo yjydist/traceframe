@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/yjydist/traceframe/internal/domain"
 )
@@ -153,6 +155,7 @@ func (s *ProjectService) updateEntity(snapshot *domain.Snapshot, entityID string
 		return EventDraft{}, fmt.Errorf("%w: update_entity requires changes", domain.ErrInvalid)
 	}
 	entity := snapshot.Entities[index]
+	wasConfirmed := entity.Status == domain.EntityConfirmed
 	if entity.Revision != expectedRevision {
 		return EventDraft{}, fmt.Errorf("%w: expected entity revision %d, current revision is %d", ErrConflict, expectedRevision, entity.Revision)
 	}
@@ -187,7 +190,48 @@ func (s *ProjectService) updateEntity(snapshot *domain.Snapshot, entityID string
 		return EventDraft{}, err
 	}
 	snapshot.Entities[index] = entity
-	return EventDraft{Type: "project.entity_updated", Payload: map[string]any{"entity_id": entity.ID, "entity_revision": entity.Revision}}, nil
+	impacted := []string{}
+	if wasConfirmed && materialEntityChange(changes) {
+		impacted = markRelatedEntitiesPotentiallyStale(snapshot, entity.ID, s.store.Now())
+	}
+	return EventDraft{Type: "project.entity_updated", Payload: map[string]any{"entity_id": entity.ID, "entity_revision": entity.Revision, "impacted_entity_ids": impacted}}, nil
+}
+
+func materialEntityChange(changes *EntityChanges) bool {
+	return changes.Title != nil || changes.Body != nil || changes.Status != nil || changes.SourceRefs != nil
+}
+
+func markRelatedEntitiesPotentiallyStale(snapshot *domain.Snapshot, sourceID string, now time.Time) []string {
+	neighbors := make(map[string][]string)
+	for _, relation := range snapshot.Relations {
+		neighbors[relation.FromID] = append(neighbors[relation.FromID], relation.ToID)
+		neighbors[relation.ToID] = append(neighbors[relation.ToID], relation.FromID)
+	}
+	seen := map[string]bool{sourceID: true}
+	queue := append([]string{}, neighbors[sourceID]...)
+	impacted := make([]string, 0)
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		index, ok := findEntity(snapshot.Entities, id)
+		if !ok {
+			continue
+		}
+		entity := &snapshot.Entities[index]
+		if (entity.Status == domain.EntityProposed || entity.Status == domain.EntityConfirmed) && entity.Freshness == domain.FreshnessCurrent {
+			entity.Freshness = domain.FreshnessPotentiallyStale
+			entity.Revision++
+			entity.UpdatedAt = now
+			impacted = append(impacted, entity.ID)
+		}
+		queue = append(queue, neighbors[id]...)
+	}
+	slices.Sort(impacted)
+	return impacted
 }
 
 func (s *ProjectService) createRelation(snapshot *domain.Snapshot, actor string, draft *RelationDraft) (EventDraft, error) {

@@ -149,3 +149,48 @@ func TestActiveRunCancellationStopsProposalApplication(t *testing.T) {
 		t.Fatalf("cancelled run mutated project: %#v", current)
 	}
 }
+
+func TestConcurrentProposalRequiresReconciliation(t *testing.T) {
+	ctx := context.Background()
+	db, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "reconciliation.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer db.Close()
+	projects := application.NewProjectService(sqlite.NewRepository(db))
+	snapshot, err := projects.Create(ctx, application.CreateProjectInput{Name: "Concurrent", RawRequest: "Frame one bounded outcome", Mode: domain.ModeGreenfield})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	runtimeStore := sqlite.NewRuntimeRepository(db)
+	model := fake.New()
+	service := NewService(projects, runtimeStore, runtimeStore, model, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	first, _, err := service.CreateRun(ctx, snapshot.Project.ID, RunRequest{Role: domain.RoleDiscovery, Task: "Propose the first evidence-backed goal", IdempotencyKey: "concurrent-1"})
+	if err != nil {
+		t.Fatalf("CreateRun(first) error = %v", err)
+	}
+	second, _, err := service.CreateRun(ctx, snapshot.Project.ID, RunRequest{Role: domain.RoleDiscovery, Task: "Propose an independent evidence-backed goal", IdempotencyKey: "concurrent-2"})
+	if err != nil {
+		t.Fatalf("CreateRun(second) error = %v", err)
+	}
+	proposal := agents.Proposal{RunID: first.ID, BaseRevision: 1, Summary: "First proposal", Commands: []application.Command{{Type: "create_entity", Entity: &application.EntityDraft{ID: "goal_concurrent", Kind: domain.KindGoal, Title: "Bounded outcome", Body: json.RawMessage(`{"outcome":"Produce one bounded outcome","success_signals":["Outcome is visible"],"priority":"must"}`), SourceRefs: []string{snapshot.Entities[0].ID}}}}, Warnings: []string{}, Unresolved: []string{}, RecommendedNextAction: "confirm_goal"}
+	output, _ := json.Marshal(proposal)
+	model.Push(fake.Result{Response: models.GenerateResponse{Output: output, ModelIdentifier: "fake"}})
+	if processed, err := service.RunOnce(ctx); err != nil || !processed {
+		t.Fatalf("RunOnce(first) = %v, %v", processed, err)
+	}
+	if processed, err := service.RunOnce(ctx); err == nil || !processed {
+		t.Fatalf("RunOnce(second) = %v, %v, want reconciliation error", processed, err)
+	}
+	conflicted, err := service.GetRun(ctx, snapshot.Project.ID, second.ID)
+	if err != nil || conflicted.State != domain.RunFailed || conflicted.ErrorCode != "reconciliation_required" || conflicted.ApplicationOutcome != "reconciliation_required" {
+		t.Fatalf("conflicted run = %#v, %v", conflicted, err)
+	}
+	if len(model.Requests()) != 1 {
+		t.Fatalf("model request count = %d, want stale run stopped before model", len(model.Requests()))
+	}
+	var events int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE project_id = ? AND type = 'run.reconciliation_required'`, snapshot.Project.ID).Scan(&events); err != nil || events != 1 {
+		t.Fatalf("reconciliation event count = %d, %v", events, err)
+	}
+}

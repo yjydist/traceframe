@@ -23,6 +23,22 @@ var discoveryKinds = map[domain.EntityKind]struct{}{
 	domain.KindConstraint: {}, domain.KindAssumption: {}, domain.KindQuestion: {}, domain.KindTerm: {},
 }
 
+var roleKinds = map[domain.AgentRole]map[domain.EntityKind]struct{}{
+	domain.RoleDiscovery:    discoveryKinds,
+	domain.RoleRequirements: kinds(domain.KindScenario, domain.KindRequirement, domain.KindQualityScenario, domain.KindTerm, domain.KindQuestion, domain.KindVerification),
+	domain.RoleArchitecture: kinds(domain.KindSystemElement, domain.KindOption, domain.KindDecision, domain.KindRisk, domain.KindExperiment, domain.KindQuestion),
+	domain.RoleQualityRisk:  kinds(domain.KindRisk, domain.KindQualityScenario, domain.KindExperiment, domain.KindConstraint, domain.KindQuestion),
+	domain.RoleDelivery:     kinds(domain.KindWorkSlice, domain.KindVerification, domain.KindRisk, domain.KindQuestion),
+}
+
+func kinds(values ...domain.EntityKind) map[domain.EntityKind]struct{} {
+	result := make(map[domain.EntityKind]struct{}, len(values))
+	for _, value := range values {
+		result[value] = struct{}{}
+	}
+	return result
+}
+
 func ValidateProposal(role domain.AgentRole, proposal Proposal) error {
 	if strings.TrimSpace(proposal.RunID) == "" || proposal.BaseRevision < 1 || strings.TrimSpace(proposal.Summary) == "" {
 		return fmt.Errorf("%w: run_id, base_revision, and summary are required", domain.ErrInvalid)
@@ -30,8 +46,9 @@ func ValidateProposal(role domain.AgentRole, proposal Proposal) error {
 	if len(proposal.Commands) == 0 || len(proposal.Commands) > 100 {
 		return fmt.Errorf("%w: proposal must contain between 1 and 100 commands", domain.ErrInvalid)
 	}
-	if role != domain.RoleDiscovery {
-		return fmt.Errorf("%w: role %q is not enabled in this milestone", domain.ErrInvalid, role)
+	allowedKinds, roleEnabled := roleKinds[role]
+	if !roleEnabled {
+		return fmt.Errorf("%w: role %q cannot submit model proposals", domain.ErrInvalid, role)
 	}
 	for index, command := range proposal.Commands {
 		switch command.Type {
@@ -39,8 +56,8 @@ func ValidateProposal(role domain.AgentRole, proposal Proposal) error {
 			if command.Entity == nil {
 				return fmt.Errorf("%w: command %d has no entity", domain.ErrInvalid, index)
 			}
-			if _, allowed := discoveryKinds[command.Entity.Kind]; !allowed {
-				return fmt.Errorf("%w: discovery cannot create %s", domain.ErrInvalid, command.Entity.Kind)
+			if _, allowed := allowedKinds[command.Entity.Kind]; !allowed {
+				return fmt.Errorf("%w: %s cannot create %s", domain.ErrInvalid, role, command.Entity.Kind)
 			}
 			if strings.TrimSpace(command.Entity.ID) == "" {
 				return fmt.Errorf("%w: agent-created entities require stable ids", domain.ErrInvalid)
@@ -58,8 +75,11 @@ func ValidateProposal(role domain.AgentRole, proposal Proposal) error {
 			if command.Relation == nil {
 				return fmt.Errorf("%w: command %d has no relation", domain.ErrInvalid, index)
 			}
+			if strings.TrimSpace(command.Relation.ID) == "" {
+				return fmt.Errorf("%w: agent-created relations require stable ids", domain.ErrInvalid)
+			}
 		default:
-			return fmt.Errorf("%w: discovery command %q is not authorized", domain.ErrInvalid, command.Type)
+			return fmt.Errorf("%w: %s command %q is not authorized", domain.ErrInvalid, role, command.Type)
 		}
 	}
 	return nil

@@ -242,12 +242,26 @@ func (r *RuntimeRepository) RecordModelResult(ctx context.Context, projectID, ru
 }
 
 func (r *RuntimeRepository) RecordProposalOutcome(ctx context.Context, projectID, runID, checksum, outcome string) error {
-	result, err := r.db.ExecContext(ctx, `UPDATE agent_runs SET proposal_checksum = ?, application_outcome = ?, updated_at = ? WHERE project_id = ? AND id = ?`, checksum, outcome, formatTime(r.now().UTC()), projectID, runID)
+	now := r.now().UTC()
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("begin proposal outcome: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET proposal_checksum = ?, application_outcome = ?, updated_at = ? WHERE project_id = ? AND id = ?`, checksum, outcome, formatTime(now), projectID, runID)
+	if err != nil {
+		return fmt.Errorf("record proposal outcome: %w", err)
 	}
 	if affected, _ := result.RowsAffected(); affected != 1 {
 		return fmt.Errorf("%w: run %s", application.ErrNotFound, runID)
+	}
+	if outcome == "reconciliation_required" {
+		if err := insertEvent(ctx, tx, projectID, "run.reconciliation_required", map[string]any{"run_id": runID, "proposal_checksum": checksum}, now); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit proposal outcome: %w", err)
 	}
 	return nil
 }

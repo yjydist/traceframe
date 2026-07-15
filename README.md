@@ -30,7 +30,9 @@ Environment variables:
 | `TRACEFRAME_DATABASE_PATH` | `data/traceframe.db` | SQLite database path |
 | `TRACEFRAME_WEB_DIR` | `web/dist` | Built frontend directory |
 | `TRACEFRAME_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
-| `TRACEFRAME_MODEL_PROVIDER` | `none` | Set to `openai` to enable discovery runs |
+| `TRACEFRAME_MODEL_PROVIDER` | `none` | Set to `openai` to enable specialist runs |
 | `OPENAI_API_KEY` | unset | OpenAI API key; required only for the OpenAI provider |
 | `TRACEFRAME_OPENAI_MODEL` | `gpt-5.6` | OpenAI model used by the adapter |
 | `TRACEFRAME_OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI Responses API base URL |
+
+The adaptive workflow routes discovery, requirements, architecture, quality/risk, and delivery specialists by stage. Significant decisions appear in the Decisions workspace and require approval against the current project and subject revisions before the workflow can advance.

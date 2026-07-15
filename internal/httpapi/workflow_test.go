@@ -27,11 +27,20 @@ func TestFramingWorkflowGatesAndReopen(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM assessments WHERE project_id = ?`, project.ID).Scan(&assessmentCount); err != nil || assessmentCount != 1 {
 		t.Fatalf("assessment count = %d, %v", assessmentCount, err)
 	}
+	corrected := performJSON(t, handler, http.MethodPut, "/api/v1/projects/"+project.ID+"/workflow/assessment", `{"expected_revision":1,"criticality":"high","active_concerns":["security","interaction"]}`)
+	var assessment workflowmodel.Assessment
+	decodeResponse(t, corrected, &assessment)
+	if !assessment.Corrected || assessment.Criticality != "high" || len(assessment.ActiveConcerns) != 2 {
+		t.Fatalf("corrected assessment = %#v", assessment)
+	}
 
 	framing := performJSON(t, handler, http.MethodPost, "/api/v1/projects/"+project.ID+"/workflow/continue", `{"expected_revision":1}`)
 	decodeResponse(t, framing, &state)
 	if state.Stage != domain.StageFraming || state.ProjectRevision != 2 || state.GatePassed {
 		t.Fatalf("framing state = %#v", state)
+	}
+	if !state.Assessment.Corrected || state.Assessment.Criticality != "high" {
+		t.Fatalf("assessment correction was not preserved: %#v", state.Assessment)
 	}
 	blocked := performJSON(t, handler, http.MethodPost, "/api/v1/projects/"+project.ID+"/workflow/continue", `{"expected_revision":2}`)
 	decodeResponse(t, blocked, &state)

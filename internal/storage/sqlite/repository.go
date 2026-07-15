@@ -233,6 +233,9 @@ func (r *Repository) Transact(ctx context.Context, projectID string, expectedRev
 	if err := persistEntities(ctx, tx, before, after); err != nil {
 		return domain.Snapshot{}, err
 	}
+	if err := invalidateChangedApprovals(ctx, tx, before, after, now); err != nil {
+		return domain.Snapshot{}, err
+	}
 	if err := persistRelations(ctx, tx, before, after); err != nil {
 		return domain.Snapshot{}, err
 	}
@@ -248,6 +251,43 @@ func (r *Repository) Transact(ctx context.Context, projectID string, expectedRev
 		return domain.Snapshot{}, fmt.Errorf("commit project transaction: %w", err)
 	}
 	return after, nil
+}
+
+func invalidateChangedApprovals(ctx context.Context, tx *sql.Tx, before, after domain.Snapshot, now time.Time) error {
+	beforeRevisions := make(map[string]int64, len(before.Entities))
+	for _, entity := range before.Entities {
+		beforeRevisions[entity.ID] = entity.Revision
+	}
+	for _, entity := range after.Entities {
+		if previous, ok := beforeRevisions[entity.ID]; !ok || previous == entity.Revision {
+			continue
+		}
+		rows, err := tx.QueryContext(ctx, `SELECT id FROM approvals WHERE project_id = ? AND subject_id = ? AND subject_revision <> ? AND status IN ('pending', 'approved')`, after.Project.ID, entity.ID, entity.Revision)
+		if err != nil {
+			return fmt.Errorf("find approvals to invalidate: %w", err)
+		}
+		ids := make([]string, 0)
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return fmt.Errorf("scan approval to invalidate: %w", err)
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close approvals to invalidate: %w", err)
+		}
+		for _, id := range ids {
+			if _, err := tx.ExecContext(ctx, `UPDATE approvals SET status = 'invalidated', updated_at = ? WHERE id = ?`, formatTime(now), id); err != nil {
+				return fmt.Errorf("invalidate approval: %w", err)
+			}
+			if err := insertEvent(ctx, tx, after.Project.ID, "approval.invalidated", map[string]any{"approval_id": id, "subject_id": entity.ID, "subject_revision": entity.Revision}, now); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (r *Repository) ListEvents(ctx context.Context, projectID string, afterSequence int64, limit int) ([]domain.Event, error) {

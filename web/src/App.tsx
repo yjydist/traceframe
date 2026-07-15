@@ -14,6 +14,10 @@ import {
   ListChecks,
   Play,
   Ban,
+  CheckCircle2,
+  Scale,
+  SlidersHorizontal,
+  XCircle,
   X,
 } from "lucide-react";
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
@@ -32,9 +36,13 @@ import {
   respondToQuestion,
   createRun,
   cancelRun,
+  correctAssessment,
+  listApprovals,
+  resolveApproval,
   updateProject,
   type Entity,
   type AgentRun,
+  type Approval,
   type ProjectMode,
 } from "./api";
 
@@ -70,8 +78,8 @@ function AppShell({ children }: { children: ReactNode }) {
   );
 }
 
-function ProjectTabs({ projectID, active }: { projectID: string; active: "model" | "questions" | "runs" }) {
-  return <nav className="project-tabs" aria-label="Project workspace"><Link className={active === "model" ? "active" : ""} to={`/projects/${projectID}/model`}><CircleDot size={16} />Model</Link><Link className={active === "questions" ? "active" : ""} to={`/projects/${projectID}/questions`}><HelpCircle size={16} />Questions</Link><Link className={active === "runs" ? "active" : ""} to={`/projects/${projectID}/runs`}><ListChecks size={16} />Runs</Link></nav>;
+function ProjectTabs({ projectID, active }: { projectID: string; active: "model" | "questions" | "decisions" | "runs" }) {
+  return <nav className="project-tabs" aria-label="Project workspace"><Link className={active === "model" ? "active" : ""} to={`/projects/${projectID}/model`}><CircleDot size={16} />Model</Link><Link className={active === "questions" ? "active" : ""} to={`/projects/${projectID}/questions`}><HelpCircle size={16} />Questions</Link><Link className={active === "decisions" ? "active" : ""} to={`/projects/${projectID}/decisions`}><Scale size={16} />Decisions</Link><Link className={active === "runs" ? "active" : ""} to={`/projects/${projectID}/runs`}><ListChecks size={16} />Runs</Link></nav>;
 }
 
 function ProjectList() {
@@ -146,11 +154,12 @@ function ModelView() {
   const { id = "" } = useParams();
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("all");
-  const [dialog, setDialog] = useState<"entity" | "relation" | "rename" | "delete" | null>(null);
+  const [dialog, setDialog] = useState<"entity" | "relation" | "rename" | "routing" | "delete" | null>(null);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const snapshot = useQuery({ queryKey: ["snapshot", id], queryFn: () => getSnapshot(id), enabled: id !== "" });
   const trace = useQuery({ queryKey: ["traceability", id], queryFn: () => getTraceability(id), enabled: id !== "" });
+  const workflow = useQuery({ queryKey: ["workflow", id], queryFn: () => getWorkflow(id), enabled: id !== "" });
   const entities = useMemo(() => {
     const source = snapshot.data?.entities ?? [];
     return source.filter((entity) => (kind === "all" || entity.kind === kind) && (entity.title.toLowerCase().includes(query.toLowerCase()) || entity.id.includes(query)));
@@ -171,6 +180,7 @@ function ModelView() {
             <div><GitBranch size={17} /><strong>{snapshot.data.relations.length}</strong><span>Relations</span></div>
             <div><Activity size={17} /><strong>{trace.data?.unlinked.length ?? 0}</strong><span>Unlinked</span></div>
           </div>
+          {workflow.data && <div className="routing-strip"><div><strong>Engineering concerns</strong><span>{workflow.data.assessment.active_concerns.join(", ") || "No conditional concerns routed"}</span></div><div><span>{workflow.data.assessment.criticality} criticality{workflow.data.assessment.corrected ? " / corrected" : ""}</span><button className="icon-button" type="button" title="Edit concern routing" onClick={() => setDialog("routing")}><SlidersHorizontal size={17} /></button></div></div>}
           <section className="model-section">
             <div className="section-heading"><div><h2>Entities</h2><p>Canonical typed knowledge in the current revision.</p></div><div className="model-filters"><label className="search-field"><Search size={16} /><span className="sr-only">Search entities</span><input placeholder="Search entities" value={query} onChange={(event) => setQuery(event.target.value)} /></label><select aria-label="Filter by kind" value={kind} onChange={(event) => setKind(event.target.value)}><option value="all">All kinds</option>{kinds.map((value) => <option value={value} key={value}>{value}</option>)}</select><button className="secondary-button" type="button" onClick={() => setDialog("entity")}><Plus size={16} />Add entity</button></div></div>
             {entities.length === 0 ? <div className="section-empty">No matching entities.</div> : <div className="entity-table" role="table"><div className="table-header" role="row"><span>Entity</span><span>Kind</span><span>Status</span><span>Revision</span></div>{entities.map((entity) => <div className="entity-row" role="row" key={entity.id}><div><strong>{entity.title}</strong><code>{entity.id}</code></div><span>{entity.kind}</span><span className="entity-status">{entity.status}</span><span>r{entity.revision}</span></div>)}</div>}
@@ -179,6 +189,7 @@ function ModelView() {
           {dialog === "entity" && <EntityDialog projectID={id} revision={snapshot.data.project.revision} onClose={() => setDialog(null)} />}
           {dialog === "relation" && <RelationDialog projectID={id} revision={snapshot.data.project.revision} entities={snapshot.data.entities} onClose={() => setDialog(null)} />}
           {dialog === "rename" && <RenameDialog projectID={id} revision={snapshot.data.project.revision} name={snapshot.data.project.name} onClose={() => setDialog(null)} />}
+          {dialog === "routing" && workflow.data && <RoutingDialog projectID={id} revision={snapshot.data.project.revision} criticality={workflow.data.assessment.criticality} concerns={workflow.data.assessment.active_concerns} onClose={() => setDialog(null)} />}
           {dialog === "delete" && <DeleteDialog projectID={id} revision={snapshot.data.project.revision} onClose={() => setDialog(null)} />}
         </>
       )}
@@ -202,12 +213,34 @@ function QuestionsView() {
 
 const terminalRunStates = new Set(["completed", "failed", "cancelled"]);
 
+function DecisionsView() {
+  const { id = "" } = useParams();
+  const queryClient = useQueryClient();
+  const [rationales, setRationales] = useState<Record<string, string>>({});
+  const snapshot = useQuery({ queryKey: ["snapshot", id], queryFn: () => getSnapshot(id), enabled: id !== "" });
+  const approvals = useQuery({ queryKey: ["approvals", id], queryFn: () => listApprovals(id), enabled: id !== "" });
+  const resolve = useMutation({
+    mutationFn: ({ approval, approve }: { approval: Approval; approve: boolean }) => resolveApproval(id, approval.id, snapshot.data!.project.revision, approve, rationales[approval.id] ?? ""),
+    onSuccess: async () => { await Promise.all([queryClient.invalidateQueries({ queryKey: ["approvals", id] }), queryClient.invalidateQueries({ queryKey: ["workflow", id] })]); },
+  });
+  const decisions = snapshot.data?.entities.filter((entity) => entity.kind === "decision") ?? [];
+  const options = snapshot.data?.entities.filter((entity) => entity.kind === "option") ?? [];
+  const approvalFor = (subjectID: string) => approvals.data?.approvals.filter((approval) => approval.subject_id === subjectID).at(-1);
+  return <AppShell>{snapshot.isPending ? <div className="loading-row">Loading decisions...</div> : snapshot.isError ? <ErrorBanner message={snapshot.error.message} /> : <><Link className="back-link" to="/projects"><ArrowLeft size={16} />Projects</Link><ProjectTabs projectID={id} active="decisions" /><div className="model-heading"><div><p className="eyebrow">{snapshot.data.project.stage} / revision {snapshot.data.project.revision}</p><h1>Decisions</h1><p>{snapshot.data.project.name}</p></div><span className="revision-badge">{approvals.data?.approvals.filter((approval) => approval.status === "pending").length ?? 0} pending</span></div>{approvals.isError && <ErrorBanner message={approvals.error.message} />}{options.length > 0 && <section className="model-section"><div className="section-heading"><div><h2>Options</h2><p>Visible alternatives and their trade-offs.</p></div></div><div className="option-grid">{options.map((option) => <article className="option-row" key={option.id}><div><h3>{option.title}</h3><code>{option.id}</code></div><p>{String(option.body.description ?? "")}</p><div><strong>Benefits</strong><span>{asList(option.body.benefits).join(", ") || "None recorded"}</span></div><div><strong>Risks</strong><span>{asList(option.body.risks).join(", ") || "None recorded"}</span></div></article>)}</div></section>}<section className="model-section"><div className="section-heading"><div><h2>Recorded decisions</h2><p>Selections remain tied to evidence, consequences, and exact revisions.</p></div></div>{decisions.length === 0 ? <div className="section-empty">No decisions recorded.</div> : <div className="decision-list">{decisions.map((decision) => { const approval = approvalFor(decision.id); return <article className="decision-row" key={decision.id}><div className="decision-summary"><div><h3>{decision.title}</h3><code>{decision.id} / entity r{decision.revision}</code></div><span className={`approval-status status-${approval?.status ?? "not-required"}`}>{approval?.status.replaceAll("_", " ") ?? "approval not required"}</span></div><p>{String(decision.body.rationale ?? "")}</p><dl><div><dt>Selected option</dt><dd>{String(decision.body.selected_option_id ?? "Not recorded")}</dd></div><div><dt>Significance</dt><dd>{String(decision.body.significance ?? "Not recorded")}</dd></div><div><dt>Consequences</dt><dd>{asList(decision.body.consequences).join(", ") || "None recorded"}</dd></div></dl>{approval?.status === "pending" && <div className="approval-actions"><label>Approval rationale<input value={rationales[approval.id] ?? ""} onChange={(event) => setRationales((current) => ({ ...current, [approval.id]: event.target.value }))} /></label><button className="secondary-button" disabled={resolve.isPending} onClick={() => resolve.mutate({ approval, approve: false })}><XCircle size={16} />Reject</button><button className="primary-button" disabled={resolve.isPending} onClick={() => resolve.mutate({ approval, approve: true })}><CheckCircle2 size={16} />Approve r{approval.subject_revision}</button></div>}</article>; })}</div>}{resolve.isError && <ErrorBanner message={resolve.error.message} />}</section></>}</AppShell>;
+}
+
+function asList(value: unknown): string[] { return Array.isArray(value) ? value.map(String) : []; }
+
 function RunsView() {
   const { id = "" } = useParams();
   const queryClient = useQueryClient();
-  const [task, setTask] = useState("Identify the next framing gaps and propose only evidence-backed discovery entities");
+  const [task, setTask] = useState("Identify the next bounded stage gap and propose only evidence-backed entities");
+  const [role, setRole] = useState("discovery");
   const snapshot = useQuery({ queryKey: ["snapshot", id], queryFn: () => getSnapshot(id), enabled: id !== "" });
   const runs = useQuery({ queryKey: ["runs", id], queryFn: () => listRuns(id), enabled: id !== "" });
+  const workflow = useQuery({ queryKey: ["workflow", id], queryFn: () => getWorkflow(id), enabled: id !== "" });
+  const roles = workflow.data?.recommended_roles.length ? workflow.data.recommended_roles : ["discovery"];
+  const selectedRole = roles.includes(role) ? role : roles[0];
   useEffect(() => {
     if (!id) return;
     const events = new EventSource(`/api/v1/projects/${id}/events`);
@@ -219,9 +252,9 @@ function RunsView() {
     events.addEventListener("project.revision_created", refresh);
     return () => events.close();
   }, [id, queryClient]);
-  const start = useMutation({ mutationFn: () => createRun(id, task), onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["runs", id] }); } });
+  const start = useMutation({ mutationFn: () => createRun(id, task, selectedRole), onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["runs", id] }); } });
   const cancel = useMutation({ mutationFn: (runID: string) => cancelRun(id, runID), onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["runs", id] }); } });
-  return <AppShell>{snapshot.isPending ? <div className="loading-row">Loading runs...</div> : snapshot.isError ? <ErrorBanner message={snapshot.error.message} /> : <><Link className="back-link" to="/projects"><ArrowLeft size={16} />Projects</Link><ProjectTabs projectID={id} active="runs" /><div className="model-heading"><div><p className="eyebrow">{snapshot.data.project.stage} / revision {snapshot.data.project.revision}</p><h1>Agent runs</h1><p>{snapshot.data.project.name}</p></div></div><section className="run-launch"><label>Bounded discovery task<textarea rows={3} value={task} onChange={(event) => setTask(event.target.value)} /></label><button className="primary-button" disabled={!task.trim() || start.isPending} onClick={() => start.mutate()}><Play size={16} />{start.isPending ? "Queueing..." : "Run discovery"}</button></section>{start.isError && <ErrorBanner message={start.error.message} />}{runs.isError && <ErrorBanner message={runs.error.message} />}<div className="run-list">{runs.data?.runs.map((run: AgentRun) => <article className="run-row" key={run.id}><div className="run-state"><span className={`status-dot run-${run.state}`} /><strong>{run.state.replaceAll("_", " ")}</strong></div><div><h2>{run.task}</h2><code>{run.id}</code>{run.error_message && <p className="run-error">{run.error_message}</p>}</div><div className="run-usage"><span>{run.role}</span><span>{run.usage.model_turns} turns</span><span>{run.usage.input_tokens + run.usage.output_tokens} tokens</span></div>{!terminalRunStates.has(run.state) && <button className="icon-button danger" title="Cancel run" onClick={() => cancel.mutate(run.id)}><Ban size={17} /></button>}</article>)}</div>{(runs.data?.runs.length ?? 0) === 0 && <div className="section-empty">No runs yet.</div>}</>}</AppShell>;
+  return <AppShell>{snapshot.isPending ? <div className="loading-row">Loading runs...</div> : snapshot.isError ? <ErrorBanner message={snapshot.error.message} /> : <><Link className="back-link" to="/projects"><ArrowLeft size={16} />Projects</Link><ProjectTabs projectID={id} active="runs" /><div className="model-heading"><div><p className="eyebrow">{snapshot.data.project.stage} / revision {snapshot.data.project.revision}</p><h1>Agent runs</h1><p>{snapshot.data.project.name}</p></div></div><section className="run-launch"><label>Specialist<select value={selectedRole} onChange={(event) => setRole(event.target.value)}>{roles.map((value) => <option key={value} value={value}>{value.replaceAll("_", " ")}</option>)}</select></label><label>Bounded task<textarea rows={3} value={task} onChange={(event) => setTask(event.target.value)} /></label><button className="primary-button" disabled={!task.trim() || start.isPending} onClick={() => start.mutate()}><Play size={16} />{start.isPending ? "Queueing..." : "Run specialist"}</button></section>{start.isError && <ErrorBanner message={start.error.message} />}{runs.isError && <ErrorBanner message={runs.error.message} />}<div className="run-list">{runs.data?.runs.map((run: AgentRun) => <article className="run-row" key={run.id}><div className="run-state"><span className={`status-dot run-${run.state}`} /><strong>{run.state.replaceAll("_", " ")}</strong></div><div><h2>{run.task}</h2><code>{run.id}</code>{run.error_message && <p className="run-error">{run.error_message}</p>}</div><div className="run-usage"><span>{run.role}</span><span>{run.usage.model_turns} turns</span><span>{run.usage.input_tokens + run.usage.output_tokens} tokens</span></div>{!terminalRunStates.has(run.state) && <button className="icon-button danger" title="Cancel run" onClick={() => cancel.mutate(run.id)}><Ban size={17} /></button>}</article>)}</div>{(runs.data?.runs.length ?? 0) === 0 && <div className="section-empty">No runs yet.</div>}</>}</AppShell>;
 }
 
 const entityKinds = ["goal", "stakeholder", "context", "scope_item", "constraint", "assumption", "question", "term", "scenario", "requirement", "quality_scenario", "risk", "option", "decision", "system_element", "work_slice", "experiment", "evidence", "verification"];
@@ -271,6 +304,17 @@ function RenameDialog({ projectID, revision, name, onClose }: { projectID: strin
   return <Dialog title="Rename project" onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}><label>Project name<input value={value} onChange={(event) => setValue(event.target.value)} required autoFocus /></label>{mutation.isError && <ErrorBanner message={mutation.error.message} />}<DialogActions onClose={onClose} pending={mutation.isPending} label="Rename" /></form></Dialog>;
 }
 
+const concernOptions = ["interaction", "api", "data", "migration", "runtime", "deployment", "security", "privacy", "reliability", "performance", "compatibility", "repository_change", "experiment"];
+
+function RoutingDialog({ projectID, revision, criticality: initialCriticality, concerns: initialConcerns, onClose }: { projectID: string; revision: number; criticality: "low" | "medium" | "high"; concerns: string[]; onClose: () => void }) {
+  const [criticality, setCriticality] = useState(initialCriticality);
+  const [concerns, setConcerns] = useState(initialConcerns);
+  const queryClient = useQueryClient();
+  const mutation = useMutation({ mutationFn: () => correctAssessment(projectID, revision, criticality, concerns), onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["workflow", projectID] }); onClose(); } });
+  function toggle(concern: string) { setConcerns((current) => current.includes(concern) ? current.filter((value) => value !== concern) : [...current, concern]); }
+  return <Dialog title="Edit concern routing" onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}><label>Criticality<select value={criticality} onChange={(event) => setCriticality(event.target.value as "low" | "medium" | "high")}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><fieldset className="concern-fieldset"><legend>Active concerns</legend><div>{concernOptions.map((concern) => <label key={concern}><input type="checkbox" checked={concerns.includes(concern)} onChange={() => toggle(concern)} />{concern.replaceAll("_", " ")}</label>)}</div></fieldset>{mutation.isError && <ErrorBanner message={mutation.error.message} />}<DialogActions onClose={onClose} pending={mutation.isPending} label="Save routing" /></form></Dialog>;
+}
+
 function DeleteDialog({ projectID, revision, onClose }: { projectID: string; revision: number; onClose: () => void }) {
   const [confirmation, setConfirmation] = useState("");
   const navigate = useNavigate();
@@ -290,5 +334,5 @@ function DialogActions({ onClose, pending, label }: { onClose: () => void; pendi
 function ErrorBanner({ message }: { message: string }) { return <div className="error-banner" role="alert">{message}</div>; }
 
 export function App() {
-  return <Routes><Route path="/projects" element={<ProjectList />} /><Route path="/projects/:id/model" element={<ModelView />} /><Route path="/projects/:id/questions" element={<QuestionsView />} /><Route path="/projects/:id/runs" element={<RunsView />} /><Route path="*" element={<Navigate to="/projects" replace />} /></Routes>;
+  return <Routes><Route path="/projects" element={<ProjectList />} /><Route path="/projects/:id/model" element={<ModelView />} /><Route path="/projects/:id/questions" element={<QuestionsView />} /><Route path="/projects/:id/decisions" element={<DecisionsView />} /><Route path="/projects/:id/runs" element={<RunsView />} /><Route path="*" element={<Navigate to="/projects" replace />} /></Routes>;
 }

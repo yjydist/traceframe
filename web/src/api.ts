@@ -51,8 +51,9 @@ export type Traceability = {
 };
 
 export type QuestionItem = { entity: Entity; priority: number; reason: string; blocking: boolean };
-export type WorkflowState = { stage: string; project_revision: number; gate_passed: boolean; blockers: string[]; checks: Array<{ code: string; passed: boolean; message: string }> };
+export type WorkflowState = { stage: string; project_revision: number; gate_passed: boolean; blockers: string[]; checks: Array<{ code: string; passed: boolean; message: string }>; recommended_roles: string[]; concerns: Array<{ name: string; mandatory: boolean; triggers: string[] }>; assessment: { criticality: "low" | "medium" | "high"; active_concerns: string[]; corrected: boolean } };
 export type AgentRun = { id: string; project_id: string; role: string; state: string; task: string; base_revision: number; usage: { model_turns: number; tool_calls: number; input_tokens: number; output_tokens: number }; error_code?: string; error_message?: string; created_at: string; updated_at: string };
+export type Approval = { id: string; project_id: string; subject_id: string; subject_revision: number; project_revision: number; status: "pending" | "approved" | "rejected" | "invalidated"; requested_by: string; resolved_by?: string; rationale?: string; created_at: string; resolved_at?: string };
 
 type Problem = { message?: string };
 
@@ -108,8 +109,15 @@ export function respondToQuestion(projectID: string, questionID: string, expecte
   return request<Snapshot>(`/api/v1/projects/${projectID}/questions/${questionID}/answer`, { method: "POST", body: JSON.stringify({ expected_revision: expectedRevision, action, ...(answer === undefined ? {} : { answer }) }) });
 }
 export function getWorkflow(projectID: string) { return request<WorkflowState>(`/api/v1/projects/${projectID}/workflow`); }
+export function correctAssessment(projectID: string, expectedRevision: number, criticality: string, activeConcerns: string[]) {
+  return request<WorkflowState["assessment"]>(`/api/v1/projects/${projectID}/workflow/assessment`, { method: "PUT", body: JSON.stringify({ expected_revision: expectedRevision, criticality, active_concerns: activeConcerns }) });
+}
 export function listRuns(projectID: string) { return request<{ runs: AgentRun[] }>(`/api/v1/projects/${projectID}/runs`); }
-export function createRun(projectID: string, task: string) {
-  return request<AgentRun>(`/api/v1/projects/${projectID}/runs`, { method: "POST", body: JSON.stringify({ role: "discovery", task, idempotency_key: crypto.randomUUID() }) });
+export function createRun(projectID: string, task: string, role: string) {
+  return request<AgentRun>(`/api/v1/projects/${projectID}/runs`, { method: "POST", body: JSON.stringify({ role, task, idempotency_key: crypto.randomUUID() }) });
 }
 export function cancelRun(projectID: string, runID: string) { return request<AgentRun>(`/api/v1/projects/${projectID}/runs/${runID}/cancel`, { method: "POST" }); }
+export function listApprovals(projectID: string) { return request<{ approvals: Approval[] }>(`/api/v1/projects/${projectID}/approvals`); }
+export function resolveApproval(projectID: string, approvalID: string, expectedRevision: number, approve: boolean, rationale: string) {
+  return request<Approval>(`/api/v1/projects/${projectID}/approvals/${approvalID}/${approve ? "approve" : "reject"}`, { method: "POST", body: JSON.stringify({ expected_revision: expectedRevision, rationale }) });
+}
