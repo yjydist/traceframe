@@ -17,6 +17,7 @@ import (
 	"github.com/yjydist/traceframe/internal/models"
 	openaiadapter "github.com/yjydist/traceframe/internal/models/openai"
 	"github.com/yjydist/traceframe/internal/orchestrator"
+	"github.com/yjydist/traceframe/internal/review"
 	"github.com/yjydist/traceframe/internal/storage/sqlite"
 	"github.com/yjydist/traceframe/internal/workflow"
 )
@@ -54,12 +55,14 @@ func run() error {
 	}
 	runs := orchestrator.NewService(projects, runtimeRepository, runtimeRepository, modelClient, logger)
 	workflowService := workflow.NewService(projects, sqlite.NewWorkflowRepository(db))
+	reviewService := review.NewService(projects, sqlite.NewReviewRepository(db))
 	runs.SetApprovalRequester(workflowService)
+	runs.SetReviewSubmitter(reviewService)
 	runs.Start(ctx)
 
 	server := &http.Server{
 		Addr:              cfg.Address,
-		Handler:           httpapi.New(db, projects, runs, workflowService, cfg.WebDir, logger),
+		Handler:           httpapi.New(db, projects, runs, workflowService, reviewService, cfg.WebDir, logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

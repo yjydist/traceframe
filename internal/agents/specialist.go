@@ -24,6 +24,9 @@ func BuildProposalRequest(run domain.AgentRun, snapshot domain.Snapshot) (models
 	if run.Role == domain.RoleDiscovery {
 		return BuildDiscoveryRequest(run, selectedSnapshot(run.Role, snapshot))
 	}
+	if run.Role == domain.RoleCritic {
+		return BuildCriticRequest(run, snapshot)
+	}
 	system, responseSchema, err := traceprompts.SpecialistV1()
 	if err != nil {
 		return models.GenerateRequest{}, fmt.Errorf("load specialist prompt: %w", err)
@@ -88,6 +91,8 @@ func contextKinds(role domain.AgentRole) map[domain.EntityKind]struct{} {
 		return kinds(domain.KindGoal, domain.KindContext, domain.KindConstraint, domain.KindAssumption, domain.KindScenario, domain.KindRequirement, domain.KindQualityScenario, domain.KindRisk, domain.KindOption, domain.KindDecision, domain.KindSystemElement, domain.KindExperiment)
 	case domain.RoleDelivery:
 		return kinds(domain.KindGoal, domain.KindScopeItem, domain.KindConstraint, domain.KindRequirement, domain.KindQualityScenario, domain.KindRisk, domain.KindDecision, domain.KindSystemElement, domain.KindWorkSlice, domain.KindVerification)
+	case domain.RoleCritic:
+		return kinds(domain.KindGoal, domain.KindStakeholder, domain.KindContext, domain.KindScopeItem, domain.KindConstraint, domain.KindAssumption, domain.KindQuestion, domain.KindTerm, domain.KindScenario, domain.KindRequirement, domain.KindQualityScenario, domain.KindRisk, domain.KindOption, domain.KindDecision, domain.KindSystemElement, domain.KindWorkSlice, domain.KindExperiment, domain.KindVerification)
 	default:
 		return discoveryKinds
 	}
@@ -103,6 +108,8 @@ func roleContract(role domain.AgentRole) string {
 		return "Challenge security, privacy, reliability, performance, operations, compatibility, and feasibility; propose measurable quality scenarios, risks, mitigations, or bounded experiments."
 	case domain.RoleDelivery:
 		return "Create ordered vertical work slices that implement confirmed requirements, reduce risk, and name explicit verification and completion evidence."
+	case domain.RoleCritic:
+		return "Independently identify contradictions, omissions, weak evidence, and over-design without rewriting the project model."
 	default:
 		return "Perform only the bounded task authorized for the role."
 	}

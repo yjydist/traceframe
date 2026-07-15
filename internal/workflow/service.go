@@ -38,7 +38,7 @@ func (s *Service) Get(ctx context.Context, projectID string) (State, error) {
 	if err := s.store.SaveAssessment(ctx, assessment); err != nil {
 		return State{}, err
 	}
-	if err := s.ensureDecisionApprovals(ctx, snapshot, "workflow"); err != nil {
+	if err := s.ensureRequiredApprovals(ctx, snapshot, "workflow"); err != nil {
 		return State{}, err
 	}
 	approvals, err := s.store.ListApprovals(ctx, projectID)
@@ -81,7 +81,7 @@ func (s *Service) ListApprovals(ctx context.Context, projectID string) ([]domain
 	if err != nil {
 		return nil, err
 	}
-	if err := s.ensureDecisionApprovals(ctx, snapshot, "workflow"); err != nil {
+	if err := s.ensureRequiredApprovals(ctx, snapshot, "workflow"); err != nil {
 		return nil, err
 	}
 	return s.store.ListApprovals(ctx, projectID)
@@ -95,17 +95,19 @@ func (s *Service) ResolveApproval(ctx context.Context, projectID, approvalID str
 	return s.store.ResolveApproval(ctx, projectID, approvalID, resolution.ExpectedRevision, status, "user", resolution.Rationale)
 }
 
-func (s *Service) EnsureDecisionApprovals(ctx context.Context, projectID, requestedBy string) error {
+func (s *Service) EnsureRequiredApprovals(ctx context.Context, projectID, requestedBy string) error {
 	snapshot, err := s.projects.Snapshot(ctx, projectID)
 	if err != nil {
 		return err
 	}
-	return s.ensureDecisionApprovals(ctx, snapshot, requestedBy)
+	return s.ensureRequiredApprovals(ctx, snapshot, requestedBy)
 }
 
-func (s *Service) ensureDecisionApprovals(ctx context.Context, snapshot domain.Snapshot, requestedBy string) error {
+func (s *Service) ensureRequiredApprovals(ctx context.Context, snapshot domain.Snapshot, requestedBy string) error {
 	for _, entity := range snapshot.Entities {
-		if entity.Kind != domain.KindDecision || entity.Freshness != domain.FreshnessCurrent || entity.Status == domain.EntityRejected || entity.Status == domain.EntitySuperseded || !decisionRequiresApproval(entity) {
+		requiresApproval := entity.Kind == domain.KindDecision && decisionRequiresApproval(entity)
+		requiresApproval = requiresApproval || (entity.Kind == domain.KindRisk && riskRequiresApproval(entity))
+		if entity.Freshness != domain.FreshnessCurrent || entity.Status == domain.EntityRejected || entity.Status == domain.EntitySuperseded || !requiresApproval {
 			continue
 		}
 		now := s.now().UTC()
@@ -284,6 +286,8 @@ func evaluate(snapshot domain.Snapshot, assessment Assessment, approvals []domai
 			GateCheck{Code: "requirement_slice_coverage", Passed: allEntitiesLinked(snapshot, domain.KindRequirement, domain.EntityConfirmed, domain.RelationImplements, domain.KindWorkSlice, true), Message: "Confirmed requirements are covered by implementation slices."},
 			GateCheck{Code: "slice_completion_evidence", Passed: allSlicesComplete(snapshot), Message: "Every slice has completion conditions and verification references."},
 		)
+	case domain.StageReview:
+		checks = append(checks, GateCheck{Code: "baseline_required", Passed: false, Message: "Independent review and exact-revision baseline approval are required."})
 	default:
 		checks = append(checks, GateCheck{Code: "handled_by_later_milestone", Passed: false, Message: "This stage is handled by a later workflow milestone."})
 	}
@@ -482,6 +486,15 @@ func decisionRequiresApproval(entity domain.Entity) bool {
 	return json.Unmarshal(entity.Body, &body) == nil && (body.ApprovalRequired || body.Significance == "architectural")
 }
 
+func riskRequiresApproval(entity domain.Entity) bool {
+	var body map[string]any
+	if json.Unmarshal(entity.Body, &body) != nil {
+		return false
+	}
+	residual := strings.ToLower(fmt.Sprint(body["residual_risk"]))
+	return residual == "high" || residual == "critical" || residual == "4" || residual == "5"
+}
+
 func decisionsApproved(snapshot domain.Snapshot, approvals []domain.Approval) bool {
 	found := false
 	for _, entity := range snapshot.Entities {
@@ -572,6 +585,8 @@ func recommendedRoles(stage domain.ProjectStage, assessment Assessment) []domain
 		roles = append(roles, domain.RoleArchitecture)
 	case domain.StageDelivery:
 		roles = append(roles, domain.RoleDelivery)
+	case domain.StageReview:
+		roles = append(roles, domain.RoleCritic)
 	}
 	for _, concern := range assessment.ActiveConcerns {
 		switch concern {
