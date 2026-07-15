@@ -18,6 +18,7 @@ import (
 	"github.com/yjydist/traceframe/internal/models"
 	openaiadapter "github.com/yjydist/traceframe/internal/models/openai"
 	"github.com/yjydist/traceframe/internal/orchestrator"
+	repositoryaccess "github.com/yjydist/traceframe/internal/repository"
 	"github.com/yjydist/traceframe/internal/review"
 	"github.com/yjydist/traceframe/internal/storage/sqlite"
 	"github.com/yjydist/traceframe/internal/workflow"
@@ -58,6 +59,10 @@ func run() error {
 	workflowService := workflow.NewService(projects, sqlite.NewWorkflowRepository(db))
 	reviewService := review.NewService(projects, sqlite.NewReviewRepository(db))
 	artifactService := artifacts.NewService(projects, workflowService, sqlite.NewArtifactRepository(db))
+	repositoryService := repositoryaccess.NewService(projects, sqlite.NewRepositoryAccessStore(db), repositoryaccess.Options{
+		MaxFileBytes: cfg.RepositoryMaxFileBytes, MaxResultBytes: cfg.RepositoryMaxResultBytes,
+		MaxResults: cfg.RepositoryMaxResults, MaxWalkFiles: cfg.RepositoryMaxWalkFiles,
+	})
 	reviewService.SetArtifactReadiness(artifactService)
 	runs.SetApprovalRequester(workflowService)
 	runs.SetReviewSubmitter(reviewService)
@@ -65,7 +70,7 @@ func run() error {
 
 	server := &http.Server{
 		Addr:              cfg.Address,
-		Handler:           httpapi.New(db, projects, runs, workflowService, reviewService, artifactService, cfg.WebDir, logger),
+		Handler:           httpapi.NewWithRepository(db, projects, runs, workflowService, reviewService, artifactService, repositoryService, cfg.WebDir, logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

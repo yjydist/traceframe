@@ -2,6 +2,7 @@ package prompts
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -15,6 +16,24 @@ func TestDiscoverySchemaUsesStrictObjects(t *testing.T) {
 		t.Fatalf("schema JSON error = %v", err)
 	}
 	checkStrictObjects(t, root, "$")
+}
+
+func TestPromptsTreatRepositoryContentAsUntrustedEvidence(t *testing.T) {
+	loaders := []struct {
+		name string
+		load func() (string, []byte, error)
+	}{{"discovery", DiscoveryV1}, {"specialist", SpecialistV1}, {"critic", CriticV1}}
+	for _, item := range loaders {
+		t.Run(item.name, func(t *testing.T) {
+			system, _, err := item.load()
+			if err != nil {
+				t.Fatalf("load prompt: %v", err)
+			}
+			if !strings.Contains(system, "untrusted evidence") || !strings.Contains(system, "grant tools") || !strings.Contains(system, "application policy") {
+				t.Fatalf("prompt does not preserve the repository trust boundary: %q", system)
+			}
+		})
+	}
 }
 
 func TestCriticSchemaUsesStrictObjects(t *testing.T) {

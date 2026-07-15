@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -15,14 +16,18 @@ const (
 )
 
 type Config struct {
-	Address       string
-	DatabasePath  string
-	WebDir        string
-	LogLevel      string
-	ModelProvider string
-	OpenAIAPIKey  string
-	OpenAIModel   string
-	OpenAIBaseURL string
+	Address                  string
+	DatabasePath             string
+	WebDir                   string
+	LogLevel                 string
+	ModelProvider            string
+	OpenAIAPIKey             string
+	OpenAIModel              string
+	OpenAIBaseURL            string
+	RepositoryMaxFileBytes   int64
+	RepositoryMaxResultBytes int
+	RepositoryMaxResults     int
+	RepositoryMaxWalkFiles   int
 }
 
 func Load() (Config, error) {
@@ -35,6 +40,19 @@ func Load() (Config, error) {
 		OpenAIAPIKey:  strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
 		OpenAIModel:   envOrDefault("TRACEFRAME_OPENAI_MODEL", "gpt-5.6"),
 		OpenAIBaseURL: envOrDefault("TRACEFRAME_OPENAI_BASE_URL", "https://api.openai.com/v1"),
+	}
+	var err error
+	if cfg.RepositoryMaxFileBytes, err = envPositiveInt64("TRACEFRAME_REPOSITORY_MAX_FILE_BYTES", 1<<20); err != nil {
+		return Config{}, err
+	}
+	if cfg.RepositoryMaxResultBytes, err = envPositiveInt("TRACEFRAME_REPOSITORY_MAX_RESULT_BYTES", 256<<10); err != nil {
+		return Config{}, err
+	}
+	if cfg.RepositoryMaxResults, err = envPositiveInt("TRACEFRAME_REPOSITORY_MAX_RESULTS", 100); err != nil {
+		return Config{}, err
+	}
+	if cfg.RepositoryMaxWalkFiles, err = envPositiveInt("TRACEFRAME_REPOSITORY_MAX_WALK_FILES", 10_000); err != nil {
+		return Config{}, err
 	}
 
 	if err := validateLoopbackAddress(cfg.Address); err != nil {
@@ -57,6 +75,26 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func envPositiveInt(key string, fallback int) (int, error) {
+	value, err := envPositiveInt64(key, int64(fallback))
+	if err != nil {
+		return 0, err
+	}
+	return int(value), nil
+}
+
+func envPositiveInt64(key string, fallback int64) (int64, error) {
+	raw, exists := os.LookupEnv(key)
+	if !exists {
+		return fallback, nil
+	}
+	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer", key)
+	}
+	return value, nil
 }
 
 func envOrDefault(key, fallback string) string {

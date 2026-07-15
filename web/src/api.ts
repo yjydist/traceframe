@@ -59,6 +59,10 @@ export type Readiness = { project_id: string; project_revision: number; ready: b
 export type Baseline = { id: string; project_id: string; project_revision: number; checksum: string; approval_actor: string; approval_rationale: string; approved_at: string; created_at: string };
 export type ArtifactVersion = { id: string; artifact_id: string; project_id: string; renderer_type: "html" | "markdown" | "json" | "mermaid"; renderer_version: string; source_revision: number; source_baseline_id?: string; included_entity_ids: string[]; content_type: string; content: string; checksum: string; generation_run_id: string; stale: boolean; created_at: string };
 export type Artifact = { id: string; project_id: string; view_type: string; title: string; renderer_type: ArtifactVersion["renderer_type"]; mandatory: boolean; concern?: string; created_at: string; latest?: ArtifactVersion };
+export type RepositoryGrant = { id: string; project_id: string; root_path: string; canonical_root: string; created_at: string; revoked_at?: string };
+export type RepositoryEntry = { path: string; kind: string; size?: number; sha256?: string; start_line?: number; end_line?: number; content?: string; summary?: string };
+export type RepositoryToolResult = { tool: string; grant_id: string; entries: RepositoryEntry[]; evidence_ids: string[]; truncated: boolean; untrusted: boolean; policy: string; model_revision?: number };
+export type ImpactAnalysis = { project_id: string; project_revision: number; mode: string; subject_id?: string; repository_evidence_ids: string[]; directly_affected_ids: string[]; transitively_affected_ids: string[]; potentially_stale_ids: string[] };
 
 type Problem = { message?: string };
 
@@ -139,3 +143,10 @@ export function listArtifacts(projectID: string) { return request<{ artifacts: A
 export function renderArtifacts(projectID: string, expectedRevision: number) {
   return request<{ source_revision: number; versions: ArtifactVersion[] }>(`/api/v1/projects/${projectID}/artifacts/render`, { method: "POST", body: JSON.stringify({ expected_revision: expectedRevision, renderers: ["html", "markdown", "json", "mermaid"] }) });
 }
+export function listRepositoryGrants(projectID: string, includeRevoked = true) { return request<{ grants: RepositoryGrant[] }>(`/api/v1/projects/${projectID}/repository/grants?include_revoked=${includeRevoked}`); }
+export function createRepositoryGrant(projectID: string, rootPath: string) { return request<RepositoryGrant>(`/api/v1/projects/${projectID}/repository/grants`, { method: "POST", body: JSON.stringify({ root_path: rootPath }) }); }
+export function revokeRepositoryGrant(projectID: string, grantID: string) { return request<RepositoryGrant>(`/api/v1/projects/${projectID}/repository/grants/${grantID}`, { method: "DELETE" }); }
+export function executeRepositoryTool(projectID: string, input: { grant_id: string; tool: string; path?: string; query?: string; start_line?: number; end_line?: number; max_results?: number; record_evidence: boolean; expected_revision?: number; subject_id?: string }) {
+  return request<RepositoryToolResult>(`/api/v1/projects/${projectID}/repository/tools`, { method: "POST", body: JSON.stringify(input) });
+}
+export function getImpactAnalysis(projectID: string, entityID = "") { return request<ImpactAnalysis>(`/api/v1/projects/${projectID}/impact${entityID ? `?entity_id=${encodeURIComponent(entityID)}` : ""}`); }

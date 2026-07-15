@@ -69,3 +69,20 @@ func TestLoadRejectsUnsupportedProviderWithoutExposingAPIKey(t *testing.T) {
 		t.Fatalf("Load() error exposed API key: %v", err)
 	}
 }
+
+func TestLoadRepositoryLimits(t *testing.T) {
+	t.Setenv("TRACEFRAME_MODEL_PROVIDER", "none")
+	t.Setenv("TRACEFRAME_REPOSITORY_MAX_FILE_BYTES", "4096")
+	t.Setenv("TRACEFRAME_REPOSITORY_MAX_RESULTS", "0")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "TRACEFRAME_REPOSITORY_MAX_RESULTS") {
+		t.Fatalf("Load() error = %v, want invalid repository limit", err)
+	}
+	t.Setenv("TRACEFRAME_REPOSITORY_MAX_RESULTS", "25")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.RepositoryMaxFileBytes != 4096 || cfg.RepositoryMaxResults != 25 {
+		t.Fatalf("repository limits = %d/%d", cfg.RepositoryMaxFileBytes, cfg.RepositoryMaxResults)
+	}
+}

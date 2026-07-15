@@ -14,22 +14,28 @@ import (
 	"github.com/yjydist/traceframe/internal/application"
 	artifactmodel "github.com/yjydist/traceframe/internal/artifacts"
 	"github.com/yjydist/traceframe/internal/orchestrator"
+	repositoryaccess "github.com/yjydist/traceframe/internal/repository"
 	"github.com/yjydist/traceframe/internal/review"
 	"github.com/yjydist/traceframe/internal/workflow"
 )
 
 type api struct {
-	db        *sql.DB
-	projects  *application.ProjectService
-	runs      *orchestrator.Service
-	workflow  *workflow.Service
-	reviews   *review.Service
-	artifacts *artifactmodel.Service
-	logger    *slog.Logger
+	db           *sql.DB
+	projects     *application.ProjectService
+	runs         *orchestrator.Service
+	workflow     *workflow.Service
+	reviews      *review.Service
+	artifacts    *artifactmodel.Service
+	repositories *repositoryaccess.Service
+	logger       *slog.Logger
 }
 
 func New(db *sql.DB, projects *application.ProjectService, runs *orchestrator.Service, workflowService *workflow.Service, reviewService *review.Service, artifactService *artifactmodel.Service, webDir string, logger *slog.Logger) http.Handler {
-	service := &api{db: db, projects: projects, runs: runs, workflow: workflowService, reviews: reviewService, artifacts: artifactService, logger: logger}
+	return NewWithRepository(db, projects, runs, workflowService, reviewService, artifactService, nil, webDir, logger)
+}
+
+func NewWithRepository(db *sql.DB, projects *application.ProjectService, runs *orchestrator.Service, workflowService *workflow.Service, reviewService *review.Service, artifactService *artifactmodel.Service, repositoryService *repositoryaccess.Service, webDir string, logger *slog.Logger) http.Handler {
+	service := &api{db: db, projects: projects, runs: runs, workflow: workflowService, reviews: reviewService, artifacts: artifactService, repositories: repositoryService, logger: logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", service.health)
 	service.registerProjectRoutes(mux)
@@ -37,6 +43,9 @@ func New(db *sql.DB, projects *application.ProjectService, runs *orchestrator.Se
 	service.registerWorkflowRoutes(mux)
 	service.registerReviewRoutes(mux)
 	service.registerArtifactRoutes(mux)
+	if repositoryService != nil {
+		service.registerRepositoryRoutes(mux)
+	}
 	mux.Handle("/", spaHandler(webDir, logger))
 	return requestID(requestLogger(mux, logger))
 }
