@@ -6,6 +6,7 @@ import {
   CircleDot,
   FolderKanban,
   GitBranch,
+  FolderSearch,
   Plus,
   Pencil,
   Search,
@@ -21,6 +22,8 @@ import {
   Layers3,
   RefreshCw,
   Scale,
+  Settings2,
+  ShieldCheck,
   SlidersHorizontal,
   XCircle,
   X,
@@ -50,7 +53,12 @@ import {
   resolveApproval,
   resolveReviewFinding,
   getReadiness,
+  getImpactAnalysis,
   renderArtifacts,
+  listRepositoryGrants,
+  createRepositoryGrant,
+  revokeRepositoryGrant,
+  executeRepositoryTool,
   updateProject,
   type Entity,
   type AgentRun,
@@ -58,6 +66,7 @@ import {
   type ReviewFinding,
   type Artifact,
   type ProjectMode,
+  type RepositoryToolResult,
 } from "./api";
 
 type Health = { status: "ok" | "unavailable"; database: "ok" | "unavailable" };
@@ -92,8 +101,8 @@ function AppShell({ children }: { children: ReactNode }) {
   );
 }
 
-function ProjectTabs({ projectID, active }: { projectID: string; active: "model" | "questions" | "decisions" | "reviews" | "artifacts" | "runs" }) {
-  return <nav className="project-tabs" aria-label="Project workspace"><Link className={active === "model" ? "active" : ""} to={`/projects/${projectID}/model`}><CircleDot size={16} />Model</Link><Link className={active === "questions" ? "active" : ""} to={`/projects/${projectID}/questions`}><HelpCircle size={16} />Questions</Link><Link className={active === "decisions" ? "active" : ""} to={`/projects/${projectID}/decisions`}><Scale size={16} />Decisions</Link><Link className={active === "reviews" ? "active" : ""} to={`/projects/${projectID}/reviews`}><ClipboardCheck size={16} />Reviews</Link><Link className={active === "artifacts" ? "active" : ""} to={`/projects/${projectID}/artifacts`}><Layers3 size={16} />Artifacts</Link><Link className={active === "runs" ? "active" : ""} to={`/projects/${projectID}/runs`}><ListChecks size={16} />Runs</Link></nav>;
+function ProjectTabs({ projectID, active }: { projectID: string; active: "model" | "questions" | "decisions" | "reviews" | "artifacts" | "runs" | "settings" }) {
+  return <nav className="project-tabs" aria-label="Project workspace"><Link className={active === "model" ? "active" : ""} to={`/projects/${projectID}/model`}><CircleDot size={16} />Model</Link><Link className={active === "questions" ? "active" : ""} to={`/projects/${projectID}/questions`}><HelpCircle size={16} />Questions</Link><Link className={active === "decisions" ? "active" : ""} to={`/projects/${projectID}/decisions`}><Scale size={16} />Decisions</Link><Link className={active === "reviews" ? "active" : ""} to={`/projects/${projectID}/reviews`}><ClipboardCheck size={16} />Reviews</Link><Link className={active === "artifacts" ? "active" : ""} to={`/projects/${projectID}/artifacts`}><Layers3 size={16} />Artifacts</Link><Link className={active === "runs" ? "active" : ""} to={`/projects/${projectID}/runs`}><ListChecks size={16} />Runs</Link><Link className={active === "settings" ? "active" : ""} to={`/projects/${projectID}/settings`}><Settings2 size={16} />Settings</Link></nav>;
 }
 
 function ProjectList() {
@@ -312,6 +321,45 @@ function RunsView() {
   return <AppShell>{snapshot.isPending ? <div className="loading-row">Loading runs...</div> : snapshot.isError ? <ErrorBanner message={snapshot.error.message} /> : <><Link className="back-link" to="/projects"><ArrowLeft size={16} />Projects</Link><ProjectTabs projectID={id} active="runs" /><div className="model-heading"><div><p className="eyebrow">{snapshot.data.project.stage} / revision {snapshot.data.project.revision}</p><h1>Agent runs</h1><p>{snapshot.data.project.name}</p></div></div><section className="run-launch"><label>Specialist<select value={selectedRole} onChange={(event) => setRole(event.target.value)}>{roles.map((value) => <option key={value} value={value}>{value.replaceAll("_", " ")}</option>)}</select></label><label>Bounded task<textarea rows={3} value={task} onChange={(event) => setTask(event.target.value)} /></label><button className="primary-button" disabled={!task.trim() || start.isPending} onClick={() => start.mutate()}><Play size={16} />{start.isPending ? "Queueing..." : "Run specialist"}</button></section>{start.isError && <ErrorBanner message={start.error.message} />}{runs.isError && <ErrorBanner message={runs.error.message} />}<div className="run-list">{runs.data?.runs.map((run: AgentRun) => <article className="run-row" key={run.id}><div className="run-state"><span className={`status-dot run-${run.state}`} /><strong>{run.state.replaceAll("_", " ")}</strong></div><div><h2>{run.task}</h2><code>{run.id}</code>{run.error_message && <p className="run-error">{run.error_message}</p>}</div><div className="run-usage"><span>{run.role}</span><span>{run.usage.model_turns} turns</span><span>{run.usage.input_tokens + run.usage.output_tokens} tokens</span></div>{!terminalRunStates.has(run.state) && <button className="icon-button danger" title="Cancel run" onClick={() => cancel.mutate(run.id)}><Ban size={17} /></button>}</article>)}</div>{(runs.data?.runs.length ?? 0) === 0 && <div className="section-empty">No runs yet.</div>}</>}</AppShell>;
 }
 
+const repositoryTools = ["list_files", "search_text", "read_file", "inspect_manifest", "inspect_git_metadata", "list_tests"];
+
+function SettingsView() {
+  const { id = "" } = useParams();
+  const queryClient = useQueryClient();
+  const snapshot = useQuery({ queryKey: ["snapshot", id], queryFn: () => getSnapshot(id), enabled: id !== "" });
+  const applicable = snapshot.data?.project.mode === "feature" || snapshot.data?.project.mode === "refactor";
+  const grants = useQuery({ queryKey: ["repository-grants", id], queryFn: () => listRepositoryGrants(id), enabled: id !== "" && applicable });
+  const [rootPath, setRootPath] = useState("");
+  const [selectedGrantID, setGrantID] = useState("");
+  const [tool, setTool] = useState("list_files");
+  const [repositoryPath, setRepositoryPath] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [startLine, setStartLine] = useState(1);
+  const [endLine, setEndLine] = useState(200);
+  const [recordEvidence, setRecordEvidence] = useState(true);
+  const [subjectID, setSubjectID] = useState("");
+  const [result, setResult] = useState<RepositoryToolResult | null>(null);
+  const activeGrants = grants.data?.grants.filter((grant) => !grant.revoked_at) ?? [];
+  const grantID = activeGrants.some((grant) => grant.id === selectedGrantID) ? selectedGrantID : activeGrants[0]?.id ?? "";
+  const impact = useQuery({ queryKey: ["repository-impact", id, subjectID], queryFn: () => getImpactAnalysis(id, subjectID), enabled: id !== "" && applicable });
+
+  const createGrant = useMutation({ mutationFn: () => createRepositoryGrant(id, rootPath), onSuccess: async (grant) => { setRootPath(""); setGrantID(grant.id); await queryClient.invalidateQueries({ queryKey: ["repository-grants", id] }); } });
+  const revokeGrant = useMutation({ mutationFn: (selected: string) => revokeRepositoryGrant(id, selected), onSuccess: async () => { setResult(null); await queryClient.invalidateQueries({ queryKey: ["repository-grants", id] }); } });
+  const execute = useMutation({
+    mutationFn: () => executeRepositoryTool(id, {
+      grant_id: grantID, tool, path: repositoryPath || undefined, query: tool === "search_text" ? searchQuery : undefined,
+      start_line: tool === "read_file" ? startLine : undefined, end_line: tool === "read_file" ? endLine : undefined,
+      record_evidence: recordEvidence, expected_revision: recordEvidence ? snapshot.data!.project.revision : undefined, subject_id: recordEvidence && subjectID ? subjectID : undefined,
+    }),
+    onSuccess: async (value) => { setResult(value); await Promise.all([queryClient.invalidateQueries({ queryKey: ["snapshot", id] }), queryClient.invalidateQueries({ queryKey: ["repository-impact", id] })]); },
+  });
+  const pageError = snapshot.error ?? grants.error ?? createGrant.error ?? revokeGrant.error ?? execute.error ?? impact.error;
+
+  if (snapshot.isPending) return <AppShell><div className="loading-row">Loading settings...</div></AppShell>;
+  if (snapshot.isError) return <AppShell><ErrorBanner message={snapshot.error.message} /></AppShell>;
+  return <AppShell><Link className="back-link" to="/projects"><ArrowLeft size={16} />Projects</Link><ProjectTabs projectID={id} active="settings" /><div className="model-heading"><div><p className="eyebrow">{snapshot.data.project.mode} / revision {snapshot.data.project.revision}</p><h1>Project settings</h1><p>{snapshot.data.project.name}</p></div><span className="revision-badge">{activeGrants.length} active roots</span></div>{pageError && <ErrorBanner message={pageError.message} />}{!applicable ? <section className="empty-state"><div className="empty-icon"><FolderSearch size={28} /></div><h2>No repository access for this mode</h2><p>Repository roots apply to feature and refactor projects.</p></section> : <><section className="model-section"><div className="section-heading"><div><h2>Repository grants</h2><p>Canonical read-only roots.</p></div></div><form className="grant-form" onSubmit={(event) => { event.preventDefault(); createGrant.mutate(); }}><label>Local root<input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="/absolute/path/to/repository" /></label><button className="primary-button" disabled={!rootPath.trim() || createGrant.isPending}><FolderSearch size={16} />Grant access</button></form><div className="grant-list">{grants.data?.grants.map((grant) => <div key={grant.id}><div><strong>{grant.canonical_root}</strong><code>{grant.id}</code></div><span className={`approval-status ${grant.revoked_at ? "status-rejected" : "status-approved"}`}>{grant.revoked_at ? "revoked" : "active"}</span>{!grant.revoked_at && <button className="icon-button danger" title="Revoke repository access" onClick={() => revokeGrant.mutate(grant.id)}><XCircle size={17} /></button>}</div>)}</div>{grants.data?.grants.length === 0 && <div className="section-empty">No repository roots granted.</div>}</section><section className="model-section"><div className="section-heading"><div><h2>Repository inspection</h2><p>Bounded tool results and evidence locators.</p></div><span className="security-label"><ShieldCheck size={15} />Read only</span></div><div className="repository-tool-grid"><label>Root<select value={grantID} onChange={(event) => setGrantID(event.target.value)}>{activeGrants.map((grant) => <option key={grant.id} value={grant.id}>{grant.canonical_root}</option>)}</select></label><label>Tool<select value={tool} onChange={(event) => setTool(event.target.value)}>{repositoryTools.map((name) => <option key={name} value={name}>{name.replaceAll("_", " ")}</option>)}</select></label><label>Relative path<input value={repositoryPath} onChange={(event) => setRepositoryPath(event.target.value)} placeholder="." /></label>{tool === "search_text" && <label>Fixed text<input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} /></label>}{tool === "read_file" && <><label>Start line<input type="number" min={1} value={startLine} onChange={(event) => setStartLine(Number(event.target.value))} /></label><label>End line<input type="number" min={1} value={endLine} onChange={(event) => setEndLine(Number(event.target.value))} /></label></>}<label>Evidence subject<select value={subjectID} onChange={(event) => setSubjectID(event.target.value)}><option value="">Current-state evidence</option>{snapshot.data.entities.filter((entity) => entity.kind !== "evidence").map((entity) => <option key={entity.id} value={entity.id}>{entity.title}</option>)}</select></label><label className="approval-check"><input type="checkbox" checked={recordEvidence} onChange={(event) => setRecordEvidence(event.target.checked)} />Record evidence</label><button className="primary-button" disabled={!grantID || execute.isPending || (tool === "search_text" && !searchQuery.trim())} onClick={() => execute.mutate()}><FolderSearch size={16} />{execute.isPending ? "Inspecting..." : "Run tool"}</button></div>{result && <div className="repository-result"><header><strong>{result.tool.replaceAll("_", " ")}</strong><span>{result.entries.length} results{result.truncated ? " / truncated" : ""}</span></header>{result.entries.map((entry, index) => <article key={`${entry.path}-${entry.start_line ?? 0}-${index}`}><div><strong>{entry.path}</strong><span>{entry.start_line ? `L${entry.start_line}-${entry.end_line}` : entry.kind}</span><code>{entry.sha256?.slice(0, 16)}</code></div>{entry.content ? <pre>{entry.content}</pre> : <p>{entry.summary}</p>}</article>)}{result.entries.length === 0 && <div className="section-empty">No matching repository content.</div>}{result.evidence_ids.length > 0 && <footer><span>Evidence</span>{result.evidence_ids.map((evidenceID) => <code key={evidenceID}>{evidenceID}</code>)}</footer>}</div>}</section><section className="model-section"><div className="section-heading"><div><h2>Current state and impact</h2><p>Evidence-backed model reachability.</p></div></div>{impact.data && <div className="impact-grid"><div><strong>Repository evidence</strong><span>{impact.data.repository_evidence_ids.length}</span></div><div><strong>Directly affected</strong><span>{impact.data.directly_affected_ids.length}</span></div><div><strong>Transitively affected</strong><span>{impact.data.transitively_affected_ids.length}</span></div><div><strong>Stale model entities</strong><span>{impact.data.potentially_stale_ids.length}</span></div></div>}<div className="impact-ids">{impact.data?.repository_evidence_ids.map((evidenceID) => <code key={evidenceID}>{evidenceID}</code>)}</div></section></>}</AppShell>;
+}
+
 const entityKinds = ["goal", "stakeholder", "context", "scope_item", "constraint", "assumption", "question", "term", "scenario", "requirement", "quality_scenario", "risk", "option", "decision", "system_element", "work_slice", "experiment", "evidence", "verification"];
 const relationTypes = ["motivates", "affects", "constrains", "assumes", "answers", "derives_from", "satisfies", "verifies", "mitigates", "selects", "rejects", "depends_on", "conflicts_with", "supersedes", "implements", "decomposes", "evidenced_by"];
 
@@ -389,5 +437,5 @@ function DialogActions({ onClose, pending, label }: { onClose: () => void; pendi
 function ErrorBanner({ message }: { message: string }) { return <div className="error-banner" role="alert">{message}</div>; }
 
 export function App() {
-  return <Routes><Route path="/projects" element={<ProjectList />} /><Route path="/projects/:id/model" element={<ModelView />} /><Route path="/projects/:id/questions" element={<QuestionsView />} /><Route path="/projects/:id/decisions" element={<DecisionsView />} /><Route path="/projects/:id/reviews" element={<ReviewsView />} /><Route path="/projects/:id/artifacts" element={<ArtifactsView />} /><Route path="/projects/:id/runs" element={<RunsView />} /><Route path="*" element={<Navigate to="/projects" replace />} /></Routes>;
+  return <Routes><Route path="/projects" element={<ProjectList />} /><Route path="/projects/:id/model" element={<ModelView />} /><Route path="/projects/:id/questions" element={<QuestionsView />} /><Route path="/projects/:id/decisions" element={<DecisionsView />} /><Route path="/projects/:id/reviews" element={<ReviewsView />} /><Route path="/projects/:id/artifacts" element={<ArtifactsView />} /><Route path="/projects/:id/runs" element={<RunsView />} /><Route path="/projects/:id/settings" element={<SettingsView />} /><Route path="*" element={<Navigate to="/projects" replace />} /></Routes>;
 }
