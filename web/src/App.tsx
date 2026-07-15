@@ -15,6 +15,8 @@ import {
   Play,
   Ban,
   CheckCircle2,
+  ClipboardCheck,
+  FileCheck2,
   Scale,
   SlidersHorizontal,
   XCircle,
@@ -37,12 +39,18 @@ import {
   createRun,
   cancelRun,
   correctAssessment,
+  createBaseline,
   listApprovals,
+  listBaselines,
+  listReviewFindings,
   resolveApproval,
+  resolveReviewFinding,
+  getReadiness,
   updateProject,
   type Entity,
   type AgentRun,
   type Approval,
+  type ReviewFinding,
   type ProjectMode,
 } from "./api";
 
@@ -78,8 +86,8 @@ function AppShell({ children }: { children: ReactNode }) {
   );
 }
 
-function ProjectTabs({ projectID, active }: { projectID: string; active: "model" | "questions" | "decisions" | "runs" }) {
-  return <nav className="project-tabs" aria-label="Project workspace"><Link className={active === "model" ? "active" : ""} to={`/projects/${projectID}/model`}><CircleDot size={16} />Model</Link><Link className={active === "questions" ? "active" : ""} to={`/projects/${projectID}/questions`}><HelpCircle size={16} />Questions</Link><Link className={active === "decisions" ? "active" : ""} to={`/projects/${projectID}/decisions`}><Scale size={16} />Decisions</Link><Link className={active === "runs" ? "active" : ""} to={`/projects/${projectID}/runs`}><ListChecks size={16} />Runs</Link></nav>;
+function ProjectTabs({ projectID, active }: { projectID: string; active: "model" | "questions" | "decisions" | "reviews" | "runs" }) {
+  return <nav className="project-tabs" aria-label="Project workspace"><Link className={active === "model" ? "active" : ""} to={`/projects/${projectID}/model`}><CircleDot size={16} />Model</Link><Link className={active === "questions" ? "active" : ""} to={`/projects/${projectID}/questions`}><HelpCircle size={16} />Questions</Link><Link className={active === "decisions" ? "active" : ""} to={`/projects/${projectID}/decisions`}><Scale size={16} />Decisions</Link><Link className={active === "reviews" ? "active" : ""} to={`/projects/${projectID}/reviews`}><ClipboardCheck size={16} />Reviews</Link><Link className={active === "runs" ? "active" : ""} to={`/projects/${projectID}/runs`}><ListChecks size={16} />Runs</Link></nav>;
 }
 
 function ProjectList() {
@@ -231,6 +239,31 @@ function DecisionsView() {
 
 function asList(value: unknown): string[] { return Array.isArray(value) ? value.map(String) : []; }
 
+function ReviewsView() {
+  const { id = "" } = useParams();
+  const queryClient = useQueryClient();
+  const [resolutions, setResolutions] = useState<Record<string, { status: string; rationale: string; counter: string }>>({});
+  const [baselineRationale, setBaselineRationale] = useState("");
+  const [baselineApproved, setBaselineApproved] = useState(false);
+  const snapshot = useQuery({ queryKey: ["snapshot", id], queryFn: () => getSnapshot(id), enabled: id !== "" });
+  const findings = useQuery({ queryKey: ["reviews", id], queryFn: () => listReviewFindings(id), enabled: id !== "" });
+  const readiness = useQuery({ queryKey: ["readiness", id], queryFn: () => getReadiness(id), enabled: id !== "" });
+  const approvals = useQuery({ queryKey: ["approvals", id], queryFn: () => listApprovals(id), enabled: id !== "" });
+  const baselines = useQuery({ queryKey: ["baselines", id], queryFn: () => listBaselines(id), enabled: id !== "" });
+  const refresh = async () => { await Promise.all([queryClient.invalidateQueries({ queryKey: ["reviews", id] }), queryClient.invalidateQueries({ queryKey: ["readiness", id] }), queryClient.invalidateQueries({ queryKey: ["approvals", id] }), queryClient.invalidateQueries({ queryKey: ["baselines", id] }), queryClient.invalidateQueries({ queryKey: ["snapshot", id] })]); };
+  const resolveFinding = useMutation({ mutationFn: (finding: ReviewFinding) => { const value = resolutions[finding.id] ?? { status: "resolved", rationale: "", counter: "" }; return resolveReviewFinding(id, finding.id, { expected_revision: snapshot.data!.project.revision, status: value.status, rationale: value.rationale, counter_evidence_refs: value.counter.split(",").map((item) => item.trim()).filter(Boolean) }); }, onSuccess: refresh });
+  const resolveRisk = useMutation({ mutationFn: ({ approval, approve }: { approval: Approval; approve: boolean }) => resolveApproval(id, approval.id, snapshot.data!.project.revision, approve, approve ? "Residual risk explicitly accepted" : "Residual risk rejected"), onSuccess: refresh });
+  const freeze = useMutation({ mutationFn: () => createBaseline(id, snapshot.data!.project.revision, baselineRationale), onSuccess: refresh });
+  const riskIDs = new Set(snapshot.data?.entities.filter((entity) => entity.kind === "risk").map((entity) => entity.id) ?? []);
+  const riskApprovals = approvals.data?.approvals.filter((approval) => riskIDs.has(approval.subject_id) && approval.status === "pending") ?? [];
+  const updateResolution = (id: string, changes: Partial<{ status: string; rationale: string; counter: string }>) => setResolutions((current) => {
+    const previous = current[id] ?? { status: "resolved", rationale: "", counter: "" };
+    return { ...current, [id]: { ...previous, ...changes } };
+  });
+  const pageError = findings.error ?? readiness.error ?? approvals.error ?? baselines.error;
+  return <AppShell>{snapshot.isPending ? <div className="loading-row">Loading review...</div> : snapshot.isError ? <ErrorBanner message={snapshot.error.message} /> : <><Link className="back-link" to="/projects"><ArrowLeft size={16} />Projects</Link><ProjectTabs projectID={id} active="reviews" /><div className="model-heading"><div><p className="eyebrow">{snapshot.data.project.stage} / revision {snapshot.data.project.revision}</p><h1>Review and readiness</h1><p>{snapshot.data.project.name}</p></div><span className={`readiness-badge ${readiness.data?.ready ? "ready" : "blocked"}`}>{readiness.data?.ready ? "Ready to baseline" : `${readiness.data?.blockers.length ?? 0} blockers`}</span></div>{pageError && <ErrorBanner message={pageError.message} />}<section className="model-section"><div className="section-heading"><div><h2>Readiness checks</h2><p>Deterministic evidence required before an immutable baseline.</p></div></div><div className="readiness-list">{readiness.data?.checks.map((check) => <div className={check.passed ? "passed" : "failed"} key={check.code}>{check.passed ? <CheckCircle2 size={17} /> : <XCircle size={17} />}<div><strong>{check.code.replaceAll("_", " ")}</strong><span>{check.message}</span></div></div>)}</div></section>{riskApprovals.length > 0 && <section className="model-section"><div className="section-heading"><div><h2>Residual risk approvals</h2><p>High residual risk requires an explicit user decision.</p></div></div>{riskApprovals.map((approval) => { const risk = snapshot.data.entities.find((entity) => entity.id === approval.subject_id); return <div className="risk-approval-row" key={approval.id}><div><strong>{risk?.title ?? approval.subject_id}</strong><span>entity r{approval.subject_revision}</span></div><button className="secondary-button" onClick={() => resolveRisk.mutate({ approval, approve: false })}><XCircle size={16} />Reject</button><button className="primary-button" onClick={() => resolveRisk.mutate({ approval, approve: true })}><CheckCircle2 size={16} />Accept risk</button></div>; })}</section>}<section className="model-section"><div className="section-heading"><div><h2>Review findings</h2><p>Blocking findings require resolution or dismissal with counter-evidence.</p></div></div>{(findings.data?.findings.length ?? 0) === 0 ? <div className="section-empty">No review findings recorded.</div> : <div className="finding-list">{findings.data?.findings.map((finding) => { const value = resolutions[finding.id] ?? { status: "resolved", rationale: "", counter: "" }; return <article className="finding-row" key={finding.id}><div className="finding-heading"><div><span className={`severity severity-${finding.severity}`}>{finding.severity}</span><strong>{finding.category}</strong></div><span>{finding.status.replaceAll("_", " ")}</span></div><h3>{finding.claim}</h3><p>{finding.evidence}</p><div className="finding-recommendation"><strong>Resolution</strong><span>{finding.recommended_resolution}</span></div>{finding.status === "open" && <div className="finding-resolution"><select aria-label={`Resolution for ${finding.id}`} value={value.status} onChange={(event) => updateResolution(finding.id, { status: event.target.value })}><option value="resolved">Resolved</option><option value="dismissed">Dismissed</option>{finding.severity !== "blocking" && <option value="risk_accepted">Risk accepted</option>}</select><input aria-label={`Rationale for ${finding.id}`} placeholder="Resolution rationale" value={value.rationale} onChange={(event) => updateResolution(finding.id, { rationale: event.target.value })} />{value.status === "dismissed" && <input aria-label={`Counter evidence for ${finding.id}`} placeholder="Counter-evidence IDs, comma separated" value={value.counter} onChange={(event) => updateResolution(finding.id, { counter: event.target.value })} />}<button className="primary-button" disabled={!value.rationale.trim() || resolveFinding.isPending} onClick={() => resolveFinding.mutate(finding)}>Resolve finding</button></div>}</article>; })}</div>}</section><section className="model-section"><div className="section-heading"><div><h2>Baselines</h2><p>Approved snapshots remain immutable as work continues.</p></div></div>{snapshot.data.project.stage === "REVIEW" && <div className="baseline-control"><label>Approval rationale<input value={baselineRationale} onChange={(event) => setBaselineRationale(event.target.value)} /></label><label className="approval-check"><input type="checkbox" checked={baselineApproved} onChange={(event) => setBaselineApproved(event.target.checked)} />Approve revision {snapshot.data.project.revision} as the implementation baseline</label><button className="primary-button" disabled={!readiness.data?.ready || !baselineApproved || !baselineRationale.trim() || freeze.isPending} onClick={() => freeze.mutate()}><FileCheck2 size={16} />Create baseline</button></div>}{freeze.isError && <ErrorBanner message={freeze.error.message} />}<div className="baseline-list">{baselines.data?.baselines.map((baseline) => <div key={baseline.id}><div><strong>Revision {baseline.project_revision}</strong><code>{baseline.checksum.slice(0, 16)}</code></div><span>{baseline.approval_rationale}</span><time>{new Date(baseline.approved_at).toLocaleString()}</time></div>)}</div>{(baselines.data?.baselines.length ?? 0) === 0 && <div className="section-empty">No baseline created.</div>}</section></>}</AppShell>;
+}
+
 function RunsView() {
   const { id = "" } = useParams();
   const queryClient = useQueryClient();
@@ -334,5 +367,5 @@ function DialogActions({ onClose, pending, label }: { onClose: () => void; pendi
 function ErrorBanner({ message }: { message: string }) { return <div className="error-banner" role="alert">{message}</div>; }
 
 export function App() {
-  return <Routes><Route path="/projects" element={<ProjectList />} /><Route path="/projects/:id/model" element={<ModelView />} /><Route path="/projects/:id/questions" element={<QuestionsView />} /><Route path="/projects/:id/decisions" element={<DecisionsView />} /><Route path="/projects/:id/runs" element={<RunsView />} /><Route path="*" element={<Navigate to="/projects" replace />} /></Routes>;
+  return <Routes><Route path="/projects" element={<ProjectList />} /><Route path="/projects/:id/model" element={<ModelView />} /><Route path="/projects/:id/questions" element={<QuestionsView />} /><Route path="/projects/:id/decisions" element={<DecisionsView />} /><Route path="/projects/:id/reviews" element={<ReviewsView />} /><Route path="/projects/:id/runs" element={<RunsView />} /><Route path="*" element={<Navigate to="/projects" replace />} /></Routes>;
 }

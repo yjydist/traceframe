@@ -182,6 +182,9 @@ func (s *ProjectService) ChangeStage(ctx context.Context, projectID string, expe
 			}
 		}
 		snapshot.Project.Stage = transition.Next
+		if transition.Next == domain.StageReady {
+			snapshot.Project.Status = domain.ProjectReady
+		}
 		gateChecks := transition.GateChecks
 		if gateChecks == nil {
 			gateChecks = []StageGateCheck{}

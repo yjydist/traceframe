@@ -17,6 +17,18 @@ func TestDiscoverySchemaUsesStrictObjects(t *testing.T) {
 	checkStrictObjects(t, root, "$")
 }
 
+func TestCriticSchemaUsesStrictObjects(t *testing.T) {
+	_, schema, err := CriticV1()
+	if err != nil {
+		t.Fatalf("CriticV1() error = %v", err)
+	}
+	var root any
+	if err := json.Unmarshal(schema, &root); err != nil {
+		t.Fatalf("schema JSON error = %v", err)
+	}
+	checkStrictObjects(t, root, "$")
+}
+
 func checkStrictObjects(t *testing.T, value any, path string) {
 	t.Helper()
 	switch typed := value.(type) {

@@ -17,6 +17,7 @@ import (
 	"github.com/yjydist/traceframe/internal/domain"
 	"github.com/yjydist/traceframe/internal/models"
 	"github.com/yjydist/traceframe/internal/orchestrator"
+	"github.com/yjydist/traceframe/internal/review"
 	"github.com/yjydist/traceframe/internal/storage/sqlite"
 	"github.com/yjydist/traceframe/internal/workflow"
 )
@@ -180,7 +181,10 @@ func newProjectTestHandler(t *testing.T) (http.Handler, *sql.DB) {
 	runtimeStore := sqlite.NewRuntimeRepository(db)
 	runs := orchestrator.NewService(projects, runtimeStore, runtimeStore, models.UnconfiguredClient{}, logger)
 	workflowService := workflow.NewService(projects, sqlite.NewWorkflowRepository(db))
-	return New(db, projects, runs, workflowService, webDir, logger), db
+	reviewService := review.NewService(projects, sqlite.NewReviewRepository(db))
+	runs.SetApprovalRequester(workflowService)
+	runs.SetReviewSubmitter(reviewService)
+	return New(db, projects, runs, workflowService, reviewService, webDir, logger), db
 }
 
 func performJSON(t *testing.T, handler http.Handler, method, target, body string) *httptest.ResponseRecorder {

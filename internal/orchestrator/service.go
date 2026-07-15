@@ -19,6 +19,7 @@ import (
 	"github.com/yjydist/traceframe/internal/domain"
 	"github.com/yjydist/traceframe/internal/jobs"
 	"github.com/yjydist/traceframe/internal/models"
+	"github.com/yjydist/traceframe/internal/review"
 )
 
 type RunRequest struct {
@@ -34,7 +35,10 @@ type Service struct {
 	jobs      jobs.Store
 	model     models.ModelClient
 	approvals interface {
-		EnsureDecisionApprovals(context.Context, string, string) error
+		EnsureRequiredApprovals(context.Context, string, string) error
+	}
+	reviews interface {
+		SubmitFindings(context.Context, string, string, int64, []review.FindingDraft) error
 	}
 	logger   *slog.Logger
 	now      func() time.Time
@@ -51,9 +55,15 @@ func NewService(projects *application.ProjectService, store Store, jobStore jobs
 }
 
 func (s *Service) SetApprovalRequester(requester interface {
-	EnsureDecisionApprovals(context.Context, string, string) error
+	EnsureRequiredApprovals(context.Context, string, string) error
 }) {
 	s.approvals = requester
+}
+
+func (s *Service) SetReviewSubmitter(submitter interface {
+	SubmitFindings(context.Context, string, string, int64, []review.FindingDraft) error
+}) {
+	s.reviews = submitter
 }
 
 func (s *Service) CreateRun(ctx context.Context, projectID string, request RunRequest) (domain.AgentRun, bool, error) {
@@ -191,7 +201,15 @@ func (s *Service) execute(parent context.Context, job jobs.Job) error {
 	if _, err = s.store.TransitionRun(ctx, run.ProjectID, run.ID, domain.RunWaitingForModel, "", ""); err != nil {
 		return fail("transition_failed", err)
 	}
-	proposal, response, usage, err := s.generateProposal(ctx, run, request)
+	var proposal agents.Proposal
+	var reviewProposal agents.ReviewProposal
+	var response models.GenerateResponse
+	var usage domain.RunUsage
+	if run.Role == domain.RoleCritic {
+		reviewProposal, response, usage, err = s.generateReviewProposal(ctx, run, request)
+	} else {
+		proposal, response, usage, err = s.generateProposal(ctx, run, request)
+	}
 	if usage.ModelTurns > 0 {
 		recordContext := ctx
 		var recordCancel context.CancelFunc
@@ -208,6 +226,40 @@ func (s *Service) execute(parent context.Context, job jobs.Job) error {
 	}
 	if _, err = s.store.TransitionRun(ctx, run.ProjectID, run.ID, domain.RunValidating, "", ""); err != nil {
 		return fail("transition_failed", err)
+	}
+	if run.Role == domain.RoleCritic {
+		if reviewProposal.RunID != run.ID || reviewProposal.BaseRevision != run.BaseRevision {
+			return fail("proposal_mismatch", fmt.Errorf("%w: review proposal run or revision mismatch", domain.ErrInvalid))
+		}
+		if err := agents.ValidateReviewProposal(reviewProposal); err != nil {
+			return fail("proposal_invalid", err)
+		}
+		requested, cancelErr := s.store.CancellationRequested(ctx, run.ID)
+		if cancelErr != nil || requested || ctx.Err() != nil {
+			if cancelErr == nil {
+				cancelErr = context.Canceled
+			}
+			return fail("cancelled", cancelErr)
+		}
+		if s.reviews == nil {
+			return fail("review_store_unavailable", fmt.Errorf("review submission is unavailable"))
+		}
+		proposalBytes, _ := json.Marshal(reviewProposal)
+		proposalDigest := sha256.Sum256(proposalBytes)
+		checksum := hex.EncodeToString(proposalDigest[:])
+		if err := s.reviews.SubmitFindings(ctx, run.ProjectID, run.ID, run.BaseRevision, reviewProposal.Findings); err != nil {
+			return fail("proposal_rejected", err)
+		}
+		if err := s.store.RecordProposalOutcome(ctx, run.ProjectID, run.ID, checksum, "applied"); err != nil {
+			return fail("persistence_failed", err)
+		}
+		if _, err = s.store.TransitionRun(ctx, run.ProjectID, run.ID, domain.RunCompleted, "", ""); err != nil {
+			return fail("transition_failed", err)
+		}
+		if err := s.jobs.Complete(ctx, job.ID, s.workerID, s.now().UTC()); err != nil {
+			return err
+		}
+		return nil
 	}
 	if proposal.RunID != run.ID || proposal.BaseRevision != run.BaseRevision {
 		return fail("proposal_mismatch", fmt.Errorf("%w: proposal run or revision mismatch", domain.ErrInvalid))
@@ -235,7 +287,7 @@ func (s *Service) execute(parent context.Context, job jobs.Job) error {
 		return fail("proposal_rejected", err)
 	}
 	if s.approvals != nil {
-		if err := s.approvals.EnsureDecisionApprovals(ctx, run.ProjectID, "agent:"+string(run.Role)); err != nil {
+		if err := s.approvals.EnsureRequiredApprovals(ctx, run.ProjectID, "agent:"+string(run.Role)); err != nil {
 			return fail("approval_request_failed", err)
 		}
 	}
@@ -319,6 +371,49 @@ func (s *Service) generateProposal(ctx context.Context, run domain.AgentRun, req
 	return agents.Proposal{}, lastResponse, usage, fmt.Errorf("no model turn available")
 }
 
+func (s *Service) generateReviewProposal(ctx context.Context, run domain.AgentRun, request models.GenerateRequest) (agents.ReviewProposal, models.GenerateResponse, domain.RunUsage, error) {
+	usage := domain.RunUsage{}
+	var lastResponse models.GenerateResponse
+	repairAttempted := false
+	for turn := 1; turn <= run.Budget.MaxModelTurns; turn++ {
+		response, err := s.model.Generate(ctx, request)
+		usage.ModelTurns++
+		if budgetErr := run.Budget.Check(usage); budgetErr != nil {
+			return agents.ReviewProposal{}, response, usage, budgetErr
+		}
+		if err != nil {
+			var providerError *models.ProviderError
+			if errors.As(err, &providerError) && providerError.Transient && turn < run.Budget.MaxModelTurns {
+				timer := time.NewTimer(time.Duration(turn) * 100 * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return agents.ReviewProposal{}, response, usage, ctx.Err()
+				case <-timer.C:
+					continue
+				}
+			}
+			return agents.ReviewProposal{}, response, usage, err
+		}
+		lastResponse = response
+		usage.InputTokens += response.Usage.InputTokens
+		usage.OutputTokens += response.Usage.OutputTokens
+		if err := run.Budget.Check(usage); err != nil {
+			return agents.ReviewProposal{}, response, usage, err
+		}
+		proposal, err := decodeReviewProposal(response.Output)
+		if err == nil {
+			return proposal, response, usage, nil
+		}
+		if repairAttempted || turn == run.Budget.MaxModelTurns {
+			return agents.ReviewProposal{}, response, usage, fmt.Errorf("structured review proposal invalid after repair: %w", err)
+		}
+		repairAttempted = true
+		request.Messages = append(request.Messages, models.Message{Role: "assistant", Content: string(response.Output)}, models.Message{Role: "user", Content: "The response did not match the required JSON schema. Return one corrected JSON object only."})
+	}
+	return agents.ReviewProposal{}, lastResponse, usage, fmt.Errorf("no model turn available")
+}
+
 func decodeProposal(data []byte) (agents.Proposal, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -328,6 +423,19 @@ func decodeProposal(data []byte) (agents.Proposal, error) {
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return agents.Proposal{}, fmt.Errorf("proposal contains trailing JSON")
+	}
+	return proposal, nil
+}
+
+func decodeReviewProposal(data []byte) (agents.ReviewProposal, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var proposal agents.ReviewProposal
+	if err := decoder.Decode(&proposal); err != nil {
+		return agents.ReviewProposal{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return agents.ReviewProposal{}, fmt.Errorf("review proposal contains trailing JSON")
 	}
 	return proposal, nil
 }
@@ -352,6 +460,8 @@ func defaultRole(stage domain.ProjectStage) domain.AgentRole {
 		return domain.RoleArchitecture
 	case domain.StageDelivery:
 		return domain.RoleDelivery
+	case domain.StageReview:
+		return domain.RoleCritic
 	default:
 		return domain.RoleDiscovery
 	}
@@ -374,6 +484,8 @@ func roleAllowedAtStage(role domain.AgentRole, stage domain.ProjectStage) bool {
 		}
 	case domain.RoleDelivery:
 		return stage == domain.StageDelivery
+	case domain.RoleCritic:
+		return stage == domain.StageReview
 	default:
 		return false
 	}

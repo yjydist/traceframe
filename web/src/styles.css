@@ -303,6 +303,42 @@ h1 {
 .status-rejected, .status-invalidated { border-color: #c98d87; color: #913b34; }
 .approval-actions { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; align-items: end; gap: 8px; margin-top: 16px; }
 .approval-actions label { display: grid; gap: 5px; color: #596159; font-size: 11px; font-weight: 700; }
+.readiness-badge { padding: 6px 9px; border: 1px solid #c6ccc5; border-radius: 4px; color: #596159; font-size: 11px; font-weight: 700; }
+.readiness-badge.ready { border-color: #72a88d; color: #28644c; }
+.readiness-badge.blocked { border-color: #c98d87; color: #913b34; }
+.readiness-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid #dfe3dd; }
+.readiness-list > div { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; min-height: 62px; padding: 13px 14px 13px 0; border-bottom: 1px solid #dfe3dd; }
+.readiness-list > div:nth-child(odd) { border-right: 1px solid #dfe3dd; }
+.readiness-list > div:nth-child(even) { padding-left: 14px; }
+.readiness-list .passed > svg { color: #2c7a56; }
+.readiness-list .failed > svg { color: #a8463d; }
+.readiness-list strong, .readiness-list span { display: block; }
+.readiness-list strong { font-size: 11px; text-transform: capitalize; }
+.readiness-list span { margin-top: 3px; color: #6a726a; font-size: 11px; }
+.risk-approval-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; min-height: 60px; border-top: 1px solid #dfe3dd; }
+.risk-approval-row > div { display: grid; gap: 4px; }
+.risk-approval-row strong { font-size: 13px; }
+.risk-approval-row span { color: #737a72; font-size: 10px; }
+.finding-list { border-top: 1px solid #dfe3dd; }
+.finding-row { padding: 20px 0; border-bottom: 1px solid #dfe3dd; }
+.finding-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; color: #6d746c; font-size: 10px; text-transform: uppercase; }
+.finding-heading > div { display: flex; align-items: center; gap: 8px; }
+.severity { padding: 3px 6px; border: 1px solid #c9cec8; border-radius: 4px; }
+.severity-blocking, .severity-high { border-color: #c98d87; color: #913b34; }
+.finding-row h3 { margin: 10px 0 5px; font-size: 15px; letter-spacing: 0; }
+.finding-row > p { margin: 0 0 12px; color: #626a62; font-size: 12px; }
+.finding-recommendation { display: flex; gap: 8px; font-size: 11px; }
+.finding-recommendation strong { color: #3d453d; }
+.finding-recommendation span { color: #687068; }
+.finding-resolution { display: grid; grid-template-columns: 140px minmax(180px, 1fr) minmax(180px, 1fr) auto; gap: 8px; margin-top: 15px; }
+.baseline-control { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(280px, 2fr) auto; align-items: end; gap: 12px; padding: 16px 0; border-top: 1px solid #dfe3dd; }
+.baseline-control > label:first-child { display: grid; gap: 5px; color: #596159; font-size: 11px; font-weight: 700; }
+.approval-check { display: flex; align-items: center; gap: 8px; min-height: 38px; font-size: 12px; }
+.approval-check input { width: 16px; height: 16px; }
+.baseline-list { border-top: 1px solid #dfe3dd; }
+.baseline-list > div { display: grid; grid-template-columns: 180px minmax(0, 1fr) auto; align-items: center; gap: 16px; min-height: 56px; border-bottom: 1px solid #dfe3dd; font-size: 11px; }
+.baseline-list > div > div { display: grid; gap: 3px; }
+.baseline-list code, .baseline-list time { color: #70776f; font-size: 10px; }
 .run-list { border-top: 1px solid #dfe3dd; }
 .run-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) auto 40px; align-items: center; gap: 18px; min-height: 82px; border-bottom: 1px solid #dfe3dd; }
 .run-state { display: flex; align-items: center; gap: 8px; font-size: 12px; text-transform: capitalize; }
@@ -376,6 +412,14 @@ h1 {
   .decision-row dl { grid-template-columns: 1fr; }
   .approval-actions { grid-template-columns: 1fr 1fr; }
   .approval-actions label { grid-column: 1 / -1; }
+  .readiness-list { grid-template-columns: 1fr; }
+  .readiness-list > div:nth-child(odd) { border-right: 0; }
+  .readiness-list > div:nth-child(even) { padding-left: 0; }
+  .risk-approval-row { grid-template-columns: 1fr 1fr; padding: 12px 0; }
+  .risk-approval-row > div { grid-column: 1 / -1; }
+  .finding-resolution { grid-template-columns: 1fr; }
+  .baseline-control { grid-template-columns: 1fr; }
+  .baseline-list > div { grid-template-columns: 1fr; gap: 5px; padding: 12px 0; }
   .run-row { grid-template-columns: 1fr auto; padding: 15px 0; }
   .run-state, .run-usage { grid-column: 1 / -1; }
   .run-usage { flex-wrap: wrap; }
