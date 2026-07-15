@@ -1,0 +1,18 @@
+# Go
+/bin/
+/coverage.out
+
+# Runtime data
+/data/
+*.db
+*.db-shm
+*.db-wal
+
+# Frontend
+/web/node_modules/
+/web/dist/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
