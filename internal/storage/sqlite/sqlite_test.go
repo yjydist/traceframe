@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"io/fs"
 	"path/filepath"
 	"testing"
 )
@@ -18,8 +19,12 @@ func TestOpenAppliesEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount); err != nil {
 		t.Fatalf("query schema_migrations: %v", err)
 	}
-	if migrationCount != 1 {
-		t.Fatalf("migration count = %d, want 1", migrationCount)
+	entries, err := fs.ReadDir(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("read embedded migrations: %v", err)
+	}
+	if migrationCount != len(entries) {
+		t.Fatalf("migration count = %d, want %d", migrationCount, len(entries))
 	}
 
 	var initialized string

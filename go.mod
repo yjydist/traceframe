@@ -2,7 +2,10 @@ module github.com/yjydist/traceframe
 
 go 1.26.0
 
-require modernc.org/sqlite v1.53.0
+require (
+	github.com/oklog/ulid/v2 v2.1.1
+	modernc.org/sqlite v1.53.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

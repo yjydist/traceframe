@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/yjydist/traceframe/internal/application"
 	"github.com/yjydist/traceframe/internal/config"
 	"github.com/yjydist/traceframe/internal/httpapi"
 	"github.com/yjydist/traceframe/internal/logging"
@@ -40,10 +41,12 @@ func run() error {
 		return err
 	}
 	defer db.Close()
+	repository := sqlite.NewRepository(db)
+	projects := application.NewProjectService(repository)
 
 	server := &http.Server{
 		Addr:              cfg.Address,
-		Handler:           httpapi.New(db, cfg.WebDir, logger),
+		Handler:           httpapi.New(db, projects, cfg.WebDir, logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

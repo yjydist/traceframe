@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yjydist/traceframe/internal/application"
 	"github.com/yjydist/traceframe/internal/storage/sqlite"
 )
 
@@ -27,7 +28,8 @@ func TestHealthAndSPA(t *testing.T) {
 		t.Fatalf("write index: %v", err)
 	}
 
-	handler := New(db, webDir, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	projects := application.NewProjectService(sqlite.NewRepository(db))
+	handler := New(db, projects, webDir, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	t.Run("health", func(t *testing.T) {
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
@@ -63,7 +65,8 @@ func TestMissingFrontendReturnsServiceUnavailable(t *testing.T) {
 	}
 	defer db.Close()
 
-	handler := New(db, t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	projects := application.NewProjectService(sqlite.NewRepository(db))
+	handler := New(db, projects, t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)

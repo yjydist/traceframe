@@ -10,19 +10,23 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"github.com/yjydist/traceframe/internal/application"
 )
 
 type api struct {
-	db     *sql.DB
-	logger *slog.Logger
+	db       *sql.DB
+	projects *application.ProjectService
+	logger   *slog.Logger
 }
 
-func New(db *sql.DB, webDir string, logger *slog.Logger) http.Handler {
-	service := &api{db: db, logger: logger}
+func New(db *sql.DB, projects *application.ProjectService, webDir string, logger *slog.Logger) http.Handler {
+	service := &api{db: db, projects: projects, logger: logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", service.health)
+	service.registerProjectRoutes(mux)
 	mux.Handle("/", spaHandler(webDir, logger))
-	return requestLogger(mux, logger)
+	return requestID(requestLogger(mux, logger))
 }
 
 func (a *api) health(w http.ResponseWriter, r *http.Request) {
