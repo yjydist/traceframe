@@ -1,0 +1,100 @@
+export type ProjectMode = "greenfield" | "feature" | "refactor" | "spike";
+
+export type Project = {
+  id: string;
+  name: string;
+  raw_request: string;
+  mode: ProjectMode;
+  output_language: string;
+  stage: string;
+  status: "active" | "ready" | "archived";
+  revision: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Entity = {
+  id: string;
+  project_id: string;
+  kind: string;
+  title: string;
+  body: Record<string, unknown>;
+  status: string;
+  origin: string;
+  confidence: number;
+  freshness: string;
+  source_refs: string[];
+  tags: string[];
+  revision: number;
+};
+
+export type Relation = {
+  id: string;
+  from_id: string;
+  type: string;
+  to_id: string;
+  rationale: string;
+};
+
+export type Snapshot = {
+  schema_version: string;
+  project: Project;
+  entities: Entity[];
+  relations: Relation[];
+};
+
+export type Traceability = {
+  project_revision: number;
+  nodes: Array<{ id: string; kind: string; title: string; incoming: number; outgoing: number }>;
+  edges: Relation[];
+  unlinked: string[];
+};
+
+type Problem = { message?: string };
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, {
+    ...init,
+    headers: init?.body ? { "Content-Type": "application/json", ...init.headers } : init?.headers,
+  });
+  if (!response.ok) {
+    const problem = (await response.json().catch(() => ({}))) as Problem;
+    throw new Error(problem.message ?? `Request failed with status ${response.status}`);
+  }
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  return response.json() as Promise<T>;
+}
+
+export function listProjects(includeArchived = false) {
+  return request<{ projects: Project[] }>(`/api/v1/projects?include_archived=${includeArchived}`);
+}
+
+export function createProject(input: { name: string; raw_request: string; mode: ProjectMode }) {
+  return request<Project>("/api/v1/projects", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function getSnapshot(projectID: string) {
+  return request<Snapshot>(`/api/v1/projects/${projectID}/snapshot`);
+}
+
+export function getTraceability(projectID: string) {
+  return request<Traceability>(`/api/v1/projects/${projectID}/traceability`);
+}
+
+export function updateProject(projectID: string, input: { expected_revision: number; name: string }) {
+  return request<Project>(`/api/v1/projects/${projectID}`, { method: "PATCH", body: JSON.stringify(input) });
+}
+
+export function archiveProject(projectID: string, expectedRevision: number) {
+  return request<Project>(`/api/v1/projects/${projectID}/archive`, { method: "POST", body: JSON.stringify({ expected_revision: expectedRevision }) });
+}
+
+export function deleteProject(projectID: string, expectedRevision: number) {
+  return request<void>(`/api/v1/projects/${projectID}`, { method: "DELETE", body: JSON.stringify({ expected_revision: expectedRevision, confirm_project_id: projectID }) });
+}
+
+export function applyCommands(projectID: string, expectedRevision: number, commands: unknown[]) {
+  return request<Snapshot>(`/api/v1/projects/${projectID}/commands`, { method: "POST", body: JSON.stringify({ expected_revision: expectedRevision, commands }) });
+}
