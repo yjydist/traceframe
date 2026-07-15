@@ -29,10 +29,13 @@ type RunRequest struct {
 }
 
 type Service struct {
-	projects *application.ProjectService
-	store    Store
-	jobs     jobs.Store
-	model    models.ModelClient
+	projects  *application.ProjectService
+	store     Store
+	jobs      jobs.Store
+	model     models.ModelClient
+	approvals interface {
+		EnsureDecisionApprovals(context.Context, string, string) error
+	}
 	logger   *slog.Logger
 	now      func() time.Time
 	workerID string
@@ -47,6 +50,12 @@ func NewService(projects *application.ProjectService, store Store, jobStore jobs
 	return &Service{projects: projects, store: store, jobs: jobStore, model: model, logger: logger, now: time.Now, workerID: domain.NewID("worker"), lease: 15 * time.Second, poll: 100 * time.Millisecond, active: make(map[string]context.CancelFunc)}
 }
 
+func (s *Service) SetApprovalRequester(requester interface {
+	EnsureDecisionApprovals(context.Context, string, string) error
+}) {
+	s.approvals = requester
+}
+
 func (s *Service) CreateRun(ctx context.Context, projectID string, request RunRequest) (domain.AgentRun, bool, error) {
 	snapshot, err := s.projects.Snapshot(ctx, projectID)
 	if err != nil {
@@ -54,10 +63,10 @@ func (s *Service) CreateRun(ctx context.Context, projectID string, request RunRe
 	}
 	request.Task = strings.TrimSpace(request.Task)
 	if request.Role == "" {
-		request.Role = domain.RoleDiscovery
+		request.Role = defaultRole(snapshot.Project.Stage)
 	}
-	if request.Role != domain.RoleDiscovery {
-		return domain.AgentRun{}, false, fmt.Errorf("%w: only discovery runs are enabled", domain.ErrInvalid)
+	if !roleAllowedAtStage(request.Role, snapshot.Project.Stage) {
+		return domain.AgentRun{}, false, fmt.Errorf("%w: %s runs are not allowed during %s", domain.ErrInvalid, request.Role, snapshot.Project.Stage)
 	}
 	if request.Task == "" || len(request.Task) > 500 || strings.EqualFold(request.Task, "improve the design") {
 		return domain.AgentRun{}, false, fmt.Errorf("%w: task must be specific, bounded, and at most 500 characters", domain.ErrInvalid)
@@ -72,14 +81,12 @@ func (s *Service) CreateRun(ctx context.Context, projectID string, request RunRe
 	requestBytes, _ := json.Marshal(request)
 	digest := sha256.Sum256(requestBytes)
 	now := s.now().UTC()
-	contextIDs := make([]string, 0, len(snapshot.Entities))
-	for _, entity := range snapshot.Entities {
-		contextIDs = append(contextIDs, entity.ID)
-	}
+	contextIDs := agents.SelectContextIDs(request.Role, snapshot)
+	promptVersion := string(request.Role) + ".v1"
 	run := domain.AgentRun{
 		ID: domain.NewID("run"), ProjectID: projectID, Role: request.Role, State: domain.RunQueued, Task: request.Task,
 		BaseRevision: snapshot.Project.Revision, Budget: budget, IdempotencyKey: request.IdempotencyKey, RequestChecksum: hex.EncodeToString(digest[:]),
-		PromptVersion: "discovery.v1", ResponseSchemaVersion: "proposal.v1", SelectedContextIDs: contextIDs, AllowedTools: []string{}, CreatedAt: now, UpdatedAt: now,
+		PromptVersion: promptVersion, ResponseSchemaVersion: "proposal.v1", SelectedContextIDs: contextIDs, AllowedTools: []string{}, CreatedAt: now, UpdatedAt: now,
 	}
 	job := jobs.Job{ID: domain.NewID("job"), ProjectID: projectID, RunID: run.ID, Type: "agent_run", State: jobs.Queued, MaxAttempts: budget.MaxAttempts, AvailableAt: now, CreatedAt: now, UpdatedAt: now}
 	return s.store.CreateRun(ctx, run, job)
@@ -174,9 +181,10 @@ func (s *Service) execute(parent context.Context, job jobs.Job) error {
 		return fail("context_failed", err)
 	}
 	if snapshot.Project.Revision != run.BaseRevision {
-		return fail("revision_conflict", fmt.Errorf("%w: run revision %d, current revision %d", application.ErrConflict, run.BaseRevision, snapshot.Project.Revision))
+		_ = s.store.RecordProposalOutcome(ctx, run.ProjectID, run.ID, "", "reconciliation_required")
+		return fail("reconciliation_required", fmt.Errorf("%w: run revision %d, current revision %d; rebuild context and reconcile", application.ErrConflict, run.BaseRevision, snapshot.Project.Revision))
 	}
-	request, err := agents.BuildDiscoveryRequest(run, snapshot)
+	request, err := agents.BuildProposalRequest(run, snapshot)
 	if err != nil {
 		return fail("context_failed", err)
 	}
@@ -220,7 +228,16 @@ func (s *Service) execute(parent context.Context, job jobs.Job) error {
 	checksum := hex.EncodeToString(proposalDigest[:])
 	_, err = s.projects.ApplyCommands(ctx, run.ProjectID, application.CommandEnvelope{ExpectedRevision: run.BaseRevision, Actor: "agent:" + string(run.Role), Commands: proposal.Commands})
 	if err != nil {
+		if errors.Is(err, application.ErrConflict) {
+			_ = s.store.RecordProposalOutcome(ctx, run.ProjectID, run.ID, checksum, "reconciliation_required")
+			return fail("reconciliation_required", fmt.Errorf("%w: proposal conflicts with a newer project revision; reconcile explicitly", err))
+		}
 		return fail("proposal_rejected", err)
+	}
+	if s.approvals != nil {
+		if err := s.approvals.EnsureDecisionApprovals(ctx, run.ProjectID, "agent:"+string(run.Role)); err != nil {
+			return fail("approval_request_failed", err)
+		}
 	}
 	if err := s.store.RecordProposalOutcome(ctx, run.ProjectID, run.ID, checksum, "applied"); err != nil {
 		return fail("persistence_failed", err)
@@ -325,4 +342,39 @@ func (s *Service) unregister(runID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.active, runID)
+}
+
+func defaultRole(stage domain.ProjectStage) domain.AgentRole {
+	switch stage {
+	case domain.StageScenarios, domain.StageRequirements:
+		return domain.RoleRequirements
+	case domain.StageShaping, domain.StageDecisions:
+		return domain.RoleArchitecture
+	case domain.StageDelivery:
+		return domain.RoleDelivery
+	default:
+		return domain.RoleDiscovery
+	}
+}
+
+func roleAllowedAtStage(role domain.AgentRole, stage domain.ProjectStage) bool {
+	switch role {
+	case domain.RoleDiscovery:
+		return stage == domain.StageIntake || stage == domain.StageFraming || stage == domain.StageContext
+	case domain.RoleRequirements:
+		return stage == domain.StageScenarios || stage == domain.StageRequirements
+	case domain.RoleArchitecture:
+		return stage == domain.StageShaping || stage == domain.StageDecisions
+	case domain.RoleQualityRisk:
+		switch stage {
+		case domain.StageContext, domain.StageScenarios, domain.StageRequirements, domain.StageShaping, domain.StageDecisions:
+			return true
+		default:
+			return false
+		}
+	case domain.RoleDelivery:
+		return stage == domain.StageDelivery
+	default:
+		return false
+	}
 }

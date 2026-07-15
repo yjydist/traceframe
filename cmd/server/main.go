@@ -54,6 +54,7 @@ func run() error {
 	}
 	runs := orchestrator.NewService(projects, runtimeRepository, runtimeRepository, modelClient, logger)
 	workflowService := workflow.NewService(projects, sqlite.NewWorkflowRepository(db))
+	runs.SetApprovalRequester(workflowService)
 	runs.Start(ctx)
 
 	server := &http.Server{
