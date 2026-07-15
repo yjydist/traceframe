@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/yjydist/traceframe/internal/application"
+	"github.com/yjydist/traceframe/internal/artifacts"
 	"github.com/yjydist/traceframe/internal/domain"
 	"github.com/yjydist/traceframe/internal/models"
 	"github.com/yjydist/traceframe/internal/orchestrator"
@@ -182,9 +183,11 @@ func newProjectTestHandler(t *testing.T) (http.Handler, *sql.DB) {
 	runs := orchestrator.NewService(projects, runtimeStore, runtimeStore, models.UnconfiguredClient{}, logger)
 	workflowService := workflow.NewService(projects, sqlite.NewWorkflowRepository(db))
 	reviewService := review.NewService(projects, sqlite.NewReviewRepository(db))
+	artifactService := artifacts.NewService(projects, workflowService, sqlite.NewArtifactRepository(db))
+	reviewService.SetArtifactReadiness(artifactService)
 	runs.SetApprovalRequester(workflowService)
 	runs.SetReviewSubmitter(reviewService)
-	return New(db, projects, runs, workflowService, reviewService, webDir, logger), db
+	return New(db, projects, runs, workflowService, reviewService, artifactService, webDir, logger), db
 }
 
 func performJSON(t *testing.T, handler http.Handler, method, target, body string) *httptest.ResponseRecorder {

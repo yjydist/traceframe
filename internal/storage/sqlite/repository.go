@@ -239,6 +239,9 @@ func (r *Repository) Transact(ctx context.Context, projectID string, expectedRev
 	if err := persistRelations(ctx, tx, before, after); err != nil {
 		return domain.Snapshot{}, err
 	}
+	if err := invalidateArtifactVersions(ctx, tx, before, after, now); err != nil {
+		return domain.Snapshot{}, err
+	}
 	if err := insertRevision(ctx, tx, projectID, after.Project.Revision, checksum, snapshotBytes, actor, now); err != nil {
 		return domain.Snapshot{}, err
 	}
@@ -251,6 +254,64 @@ func (r *Repository) Transact(ctx context.Context, projectID string, expectedRev
 		return domain.Snapshot{}, fmt.Errorf("commit project transaction: %w", err)
 	}
 	return after, nil
+}
+
+func invalidateArtifactVersions(ctx context.Context, tx *sql.Tx, before, after domain.Snapshot, now time.Time) error {
+	if !modelContentChanged(before, after) {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id, artifact_id FROM artifact_versions WHERE project_id = ? AND stale = 0`, after.Project.ID)
+	if err != nil {
+		return fmt.Errorf("find artifact versions to invalidate: %w", err)
+	}
+	type invalidation struct{ versionID, artifactID string }
+	versions := make([]invalidation, 0)
+	for rows.Next() {
+		var item invalidation
+		if err := rows.Scan(&item.versionID, &item.artifactID); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan artifact invalidation: %w", err)
+		}
+		versions = append(versions, item)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close artifact invalidations: %w", err)
+	}
+	for _, item := range versions {
+		if _, err := tx.ExecContext(ctx, `UPDATE artifact_versions SET stale = 1 WHERE id = ?`, item.versionID); err != nil {
+			return fmt.Errorf("invalidate artifact version: %w", err)
+		}
+		if err := insertEvent(ctx, tx, after.Project.ID, "artifact.invalidated", map[string]any{"artifact_id": item.artifactID, "version_id": item.versionID, "model_revision": before.Project.Revision + 1}, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func modelContentChanged(before, after domain.Snapshot) bool {
+	if len(before.Entities) != len(after.Entities) || len(before.Relations) != len(after.Relations) {
+		return true
+	}
+	entityRevisions := make(map[string]int64, len(before.Entities))
+	for _, entity := range before.Entities {
+		entityRevisions[entity.ID] = entity.Revision
+	}
+	for _, entity := range after.Entities {
+		if entityRevisions[entity.ID] != entity.Revision {
+			return true
+		}
+	}
+	relations := make(map[string]domain.Relation, len(before.Relations))
+	for _, relation := range before.Relations {
+		relations[relation.ID] = relation
+	}
+	for _, relation := range after.Relations {
+		previous, ok := relations[relation.ID]
+		if !ok || previous.FromID != relation.FromID || previous.ToID != relation.ToID || previous.Type != relation.Type || previous.Rationale != relation.Rationale {
+			return true
+		}
+	}
+	return false
 }
 
 func invalidateChangedApprovals(ctx context.Context, tx *sql.Tx, before, after domain.Snapshot, now time.Time) error {

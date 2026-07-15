@@ -235,8 +235,20 @@ func (a *api) getTraceability(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) exportProject(w http.ResponseWriter, r *http.Request) {
 	format := r.URL.Query().Get("format")
+	if format == "markdown" {
+		content, err := a.artifacts.ExportMarkdown(r.Context(), r.PathValue("projectID"))
+		if err != nil {
+			a.writeError(w, r, err)
+			return
+		}
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="traceframe-implementation.md"`)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(content))
+		return
+	}
 	if format != "" && format != "json" {
-		a.writeError(w, r, fmt.Errorf("%w: format must be json", domain.ErrInvalid))
+		a.writeError(w, r, fmt.Errorf("%w: format must be json or markdown", domain.ErrInvalid))
 		return
 	}
 	data, err := a.projects.ExportJSON(r.Context(), r.PathValue("projectID"))

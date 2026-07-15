@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/yjydist/traceframe/internal/application"
+	"github.com/yjydist/traceframe/internal/artifacts"
 	"github.com/yjydist/traceframe/internal/models"
 	"github.com/yjydist/traceframe/internal/orchestrator"
 	"github.com/yjydist/traceframe/internal/review"
@@ -38,7 +39,9 @@ func TestHealthAndSPA(t *testing.T) {
 	runs := orchestrator.NewService(projects, runtimeStore, runtimeStore, models.UnconfiguredClient{}, logger)
 	workflowService := workflow.NewService(projects, sqlite.NewWorkflowRepository(db))
 	reviewService := review.NewService(projects, sqlite.NewReviewRepository(db))
-	handler := New(db, projects, runs, workflowService, reviewService, webDir, logger)
+	artifactService := artifacts.NewService(projects, workflowService, sqlite.NewArtifactRepository(db))
+	reviewService.SetArtifactReadiness(artifactService)
+	handler := New(db, projects, runs, workflowService, reviewService, artifactService, webDir, logger)
 
 	t.Run("health", func(t *testing.T) {
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
@@ -80,7 +83,9 @@ func TestMissingFrontendReturnsServiceUnavailable(t *testing.T) {
 	runs := orchestrator.NewService(projects, runtimeStore, runtimeStore, models.UnconfiguredClient{}, logger)
 	workflowService := workflow.NewService(projects, sqlite.NewWorkflowRepository(db))
 	reviewService := review.NewService(projects, sqlite.NewReviewRepository(db))
-	handler := New(db, projects, runs, workflowService, reviewService, t.TempDir(), logger)
+	artifactService := artifacts.NewService(projects, workflowService, sqlite.NewArtifactRepository(db))
+	reviewService.SetArtifactReadiness(artifactService)
+	handler := New(db, projects, runs, workflowService, reviewService, artifactService, t.TempDir(), logger)
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)

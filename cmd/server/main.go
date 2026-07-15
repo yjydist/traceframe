@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/yjydist/traceframe/internal/application"
+	"github.com/yjydist/traceframe/internal/artifacts"
 	"github.com/yjydist/traceframe/internal/config"
 	"github.com/yjydist/traceframe/internal/httpapi"
 	"github.com/yjydist/traceframe/internal/logging"
@@ -56,13 +57,15 @@ func run() error {
 	runs := orchestrator.NewService(projects, runtimeRepository, runtimeRepository, modelClient, logger)
 	workflowService := workflow.NewService(projects, sqlite.NewWorkflowRepository(db))
 	reviewService := review.NewService(projects, sqlite.NewReviewRepository(db))
+	artifactService := artifacts.NewService(projects, workflowService, sqlite.NewArtifactRepository(db))
+	reviewService.SetArtifactReadiness(artifactService)
 	runs.SetApprovalRequester(workflowService)
 	runs.SetReviewSubmitter(reviewService)
 	runs.Start(ctx)
 
 	server := &http.Server{
 		Addr:              cfg.Address,
-		Handler:           httpapi.New(db, projects, runs, workflowService, reviewService, cfg.WebDir, logger),
+		Handler:           httpapi.New(db, projects, runs, workflowService, reviewService, artifactService, cfg.WebDir, logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

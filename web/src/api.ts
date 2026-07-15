@@ -57,6 +57,8 @@ export type Approval = { id: string; project_id: string; subject_id: string; sub
 export type ReviewFinding = { id: string; project_id: string; run_id: string; project_revision: number; severity: "info" | "low" | "medium" | "high" | "blocking"; category: string; affected_entity_ids: string[]; claim: string; evidence: string; recommended_resolution: string; status: "open" | "resolved" | "dismissed" | "risk_accepted"; resolution_rationale?: string; counter_evidence_refs: string[] };
 export type Readiness = { project_id: string; project_revision: number; ready: boolean; checks: Array<{ code: string; passed: boolean; message: string }>; blockers: string[] };
 export type Baseline = { id: string; project_id: string; project_revision: number; checksum: string; approval_actor: string; approval_rationale: string; approved_at: string; created_at: string };
+export type ArtifactVersion = { id: string; artifact_id: string; project_id: string; renderer_type: "html" | "markdown" | "json" | "mermaid"; renderer_version: string; source_revision: number; source_baseline_id?: string; included_entity_ids: string[]; content_type: string; content: string; checksum: string; generation_run_id: string; stale: boolean; created_at: string };
+export type Artifact = { id: string; project_id: string; view_type: string; title: string; renderer_type: ArtifactVersion["renderer_type"]; mandatory: boolean; concern?: string; created_at: string; latest?: ArtifactVersion };
 
 type Problem = { message?: string };
 
@@ -132,4 +134,8 @@ export function getReadiness(projectID: string) { return request<Readiness>(`/ap
 export function listBaselines(projectID: string) { return request<{ baselines: Baseline[] }>(`/api/v1/projects/${projectID}/baselines`); }
 export function createBaseline(projectID: string, expectedRevision: number, rationale: string) {
   return request<Baseline>(`/api/v1/projects/${projectID}/baseline`, { method: "POST", body: JSON.stringify({ expected_revision: expectedRevision, approve: true, rationale }) });
+}
+export function listArtifacts(projectID: string) { return request<{ artifacts: Artifact[] }>(`/api/v1/projects/${projectID}/artifacts`); }
+export function renderArtifacts(projectID: string, expectedRevision: number) {
+  return request<{ source_revision: number; versions: ArtifactVersion[] }>(`/api/v1/projects/${projectID}/artifacts/render`, { method: "POST", body: JSON.stringify({ expected_revision: expectedRevision, renderers: ["html", "markdown", "json", "mermaid"] }) });
 }

@@ -152,7 +152,8 @@ func (r *ReviewRepository) CreateBaseline(ctx context.Context, baseline review.B
 		return review.Baseline{}, false, fmt.Errorf("load baseline revision: %w", err)
 	}
 	baseline.Snapshot = json.RawMessage(snapshot)
-	result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO baselines (id, project_id, project_revision, checksum, snapshot_json, approval_actor, approval_rationale, approved_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, baseline.ID, baseline.ProjectID, baseline.ProjectRevision, baseline.Checksum, string(baseline.Snapshot), baseline.ApprovalActor, baseline.ApprovalRationale, formatTime(baseline.ApprovedAt), formatTime(baseline.CreatedAt))
+	concerns, _ := json.Marshal(baseline.RoutedConcerns)
+	result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO baselines (id, project_id, project_revision, checksum, snapshot_json, routed_concerns_json, approval_actor, approval_rationale, approved_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, baseline.ID, baseline.ProjectID, baseline.ProjectRevision, baseline.Checksum, string(baseline.Snapshot), string(concerns), baseline.ApprovalActor, baseline.ApprovalRationale, formatTime(baseline.ApprovedAt), formatTime(baseline.CreatedAt))
 	if err != nil {
 		return review.Baseline{}, false, fmt.Errorf("insert baseline: %w", err)
 	}
@@ -222,18 +223,21 @@ func scanFinding(scanner approvalScanner) (review.Finding, error) {
 	return finding, nil
 }
 
-const baselineSelect = `SELECT id, project_id, project_revision, checksum, snapshot_json, approval_actor, approval_rationale, approved_at, created_at FROM baselines`
+const baselineSelect = `SELECT id, project_id, project_revision, checksum, snapshot_json, routed_concerns_json, approval_actor, approval_rationale, approved_at, created_at FROM baselines`
 
 func scanBaseline(scanner approvalScanner) (review.Baseline, error) {
 	var baseline review.Baseline
-	var snapshot, approvedAt, createdAt string
-	if err := scanner.Scan(&baseline.ID, &baseline.ProjectID, &baseline.ProjectRevision, &baseline.Checksum, &snapshot, &baseline.ApprovalActor, &baseline.ApprovalRationale, &approvedAt, &createdAt); err != nil {
+	var snapshot, concerns, approvedAt, createdAt string
+	if err := scanner.Scan(&baseline.ID, &baseline.ProjectID, &baseline.ProjectRevision, &baseline.Checksum, &snapshot, &concerns, &baseline.ApprovalActor, &baseline.ApprovalRationale, &approvedAt, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return review.Baseline{}, fmt.Errorf("%w: baseline", application.ErrNotFound)
 		}
 		return review.Baseline{}, fmt.Errorf("scan baseline: %w", err)
 	}
 	baseline.Snapshot = json.RawMessage(snapshot)
+	if err := json.Unmarshal([]byte(concerns), &baseline.RoutedConcerns); err != nil {
+		return review.Baseline{}, fmt.Errorf("decode baseline concerns: %w", err)
+	}
 	var err error
 	if baseline.ApprovedAt, err = parseTime(approvedAt); err != nil {
 		return review.Baseline{}, err
