@@ -12,19 +12,25 @@ import (
 	"time"
 
 	"github.com/yjydist/traceframe/internal/application"
+	"github.com/yjydist/traceframe/internal/orchestrator"
+	"github.com/yjydist/traceframe/internal/workflow"
 )
 
 type api struct {
 	db       *sql.DB
 	projects *application.ProjectService
+	runs     *orchestrator.Service
+	workflow *workflow.Service
 	logger   *slog.Logger
 }
 
-func New(db *sql.DB, projects *application.ProjectService, webDir string, logger *slog.Logger) http.Handler {
-	service := &api{db: db, projects: projects, logger: logger}
+func New(db *sql.DB, projects *application.ProjectService, runs *orchestrator.Service, workflowService *workflow.Service, webDir string, logger *slog.Logger) http.Handler {
+	service := &api{db: db, projects: projects, runs: runs, workflow: workflowService, logger: logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", service.health)
 	service.registerProjectRoutes(mux)
+	service.registerRunRoutes(mux)
+	service.registerWorkflowRoutes(mux)
 	mux.Handle("/", spaHandler(webDir, logger))
 	return requestID(requestLogger(mux, logger))
 }

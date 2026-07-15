@@ -29,7 +29,31 @@ func (a *api) registerProjectRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/projects/{projectID}/commands", a.applyCommands)
 	mux.HandleFunc("GET /api/v1/projects/{projectID}/relations", a.listRelations)
 	mux.HandleFunc("GET /api/v1/projects/{projectID}/traceability", a.getTraceability)
+	mux.HandleFunc("GET /api/v1/projects/{projectID}/questions", a.listQuestions)
+	mux.HandleFunc("POST /api/v1/projects/{projectID}/questions/{questionID}/answer", a.answerQuestion)
 	mux.HandleFunc("GET /api/v1/projects/{projectID}/export", a.exportProject)
+}
+
+func (a *api) listQuestions(w http.ResponseWriter, r *http.Request) {
+	questions, err := a.projects.Questions(r.Context(), r.PathValue("projectID"))
+	if err != nil {
+		a.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"questions": questions})
+}
+
+func (a *api) answerQuestion(w http.ResponseWriter, r *http.Request) {
+	var response application.QuestionResponse
+	if !decodeJSON(w, r, &response) {
+		return
+	}
+	snapshot, err := a.projects.RespondToQuestion(r.Context(), r.PathValue("projectID"), r.PathValue("questionID"), response)
+	if err != nil {
+		a.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (a *api) createProject(w http.ResponseWriter, r *http.Request) {

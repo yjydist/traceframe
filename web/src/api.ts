@@ -50,6 +50,10 @@ export type Traceability = {
   unlinked: string[];
 };
 
+export type QuestionItem = { entity: Entity; priority: number; reason: string; blocking: boolean };
+export type WorkflowState = { stage: string; project_revision: number; gate_passed: boolean; blockers: string[]; checks: Array<{ code: string; passed: boolean; message: string }> };
+export type AgentRun = { id: string; project_id: string; role: string; state: string; task: string; base_revision: number; usage: { model_turns: number; tool_calls: number; input_tokens: number; output_tokens: number }; error_code?: string; error_message?: string; created_at: string; updated_at: string };
+
 type Problem = { message?: string };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -98,3 +102,14 @@ export function deleteProject(projectID: string, expectedRevision: number) {
 export function applyCommands(projectID: string, expectedRevision: number, commands: unknown[]) {
   return request<Snapshot>(`/api/v1/projects/${projectID}/commands`, { method: "POST", body: JSON.stringify({ expected_revision: expectedRevision, commands }) });
 }
+
+export function listQuestions(projectID: string) { return request<{ questions: QuestionItem[] }>(`/api/v1/projects/${projectID}/questions`); }
+export function respondToQuestion(projectID: string, questionID: string, expectedRevision: number, action: "answer" | "defer" | "reject", answer?: string) {
+  return request<Snapshot>(`/api/v1/projects/${projectID}/questions/${questionID}/answer`, { method: "POST", body: JSON.stringify({ expected_revision: expectedRevision, action, ...(answer === undefined ? {} : { answer }) }) });
+}
+export function getWorkflow(projectID: string) { return request<WorkflowState>(`/api/v1/projects/${projectID}/workflow`); }
+export function listRuns(projectID: string) { return request<{ runs: AgentRun[] }>(`/api/v1/projects/${projectID}/runs`); }
+export function createRun(projectID: string, task: string) {
+  return request<AgentRun>(`/api/v1/projects/${projectID}/runs`, { method: "POST", body: JSON.stringify({ role: "discovery", task, idempotency_key: crypto.randomUUID() }) });
+}
+export function cancelRun(projectID: string, runID: string) { return request<AgentRun>(`/api/v1/projects/${projectID}/runs/${runID}/cancel`, { method: "POST" }); }

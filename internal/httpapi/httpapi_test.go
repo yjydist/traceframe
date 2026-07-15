@@ -12,7 +12,10 @@ import (
 	"testing"
 
 	"github.com/yjydist/traceframe/internal/application"
+	"github.com/yjydist/traceframe/internal/models"
+	"github.com/yjydist/traceframe/internal/orchestrator"
 	"github.com/yjydist/traceframe/internal/storage/sqlite"
+	"github.com/yjydist/traceframe/internal/workflow"
 )
 
 func TestHealthAndSPA(t *testing.T) {
@@ -29,7 +32,11 @@ func TestHealthAndSPA(t *testing.T) {
 	}
 
 	projects := application.NewProjectService(sqlite.NewRepository(db))
-	handler := New(db, projects, webDir, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	runtimeStore := sqlite.NewRuntimeRepository(db)
+	runs := orchestrator.NewService(projects, runtimeStore, runtimeStore, models.UnconfiguredClient{}, logger)
+	workflowService := workflow.NewService(projects, sqlite.NewWorkflowRepository(db))
+	handler := New(db, projects, runs, workflowService, webDir, logger)
 
 	t.Run("health", func(t *testing.T) {
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
@@ -66,7 +73,11 @@ func TestMissingFrontendReturnsServiceUnavailable(t *testing.T) {
 	defer db.Close()
 
 	projects := application.NewProjectService(sqlite.NewRepository(db))
-	handler := New(db, projects, t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	runtimeStore := sqlite.NewRuntimeRepository(db)
+	runs := orchestrator.NewService(projects, runtimeStore, runtimeStore, models.UnconfiguredClient{}, logger)
+	workflowService := workflow.NewService(projects, sqlite.NewWorkflowRepository(db))
+	handler := New(db, projects, runs, workflowService, t.TempDir(), logger)
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)

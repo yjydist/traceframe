@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/yjydist/traceframe/internal/domain"
 )
@@ -34,6 +35,22 @@ type UpdateProjectInput struct {
 	ClearAppetite    bool                `json:"clear_appetite,omitempty"`
 }
 
+type StageGateCheck struct {
+	Code    string `json:"code"`
+	Passed  bool   `json:"passed"`
+	Message string `json:"message"`
+}
+
+type StageTransition struct {
+	Next              domain.ProjectStage
+	Actor             string
+	Reopened          bool
+	GateChecks        []StageGateCheck
+	Unresolved        []string
+	Reason            string
+	ApprovalReference string
+}
+
 func (s *ProjectService) Create(ctx context.Context, input CreateProjectInput) (domain.Snapshot, error) {
 	now := s.store.Now()
 	mode := input.Mode
@@ -60,7 +77,19 @@ func (s *ProjectService) Create(ctx context.Context, input CreateProjectInput) (
 	if err := domain.ValidateProject(project); err != nil {
 		return domain.Snapshot{}, err
 	}
-	return s.store.CreateProject(ctx, project, "user")
+	evidenceBody, err := json.Marshal(map[string]any{
+		"evidence_type": "user_statement", "summary": project.RawRequest, "locator": "project.raw_request",
+		"captured_at": now.Format(time.RFC3339Nano), "freshness": "current", "trust_notes": "Captured verbatim at project creation.",
+	})
+	if err != nil {
+		return domain.Snapshot{}, err
+	}
+	evidence := domain.Entity{
+		ID: domain.NewID("evidence"), ProjectID: project.ID, Kind: domain.KindEvidence, Title: "Initial project request", Body: evidenceBody,
+		Status: domain.EntityConfirmed, Origin: domain.OriginUser, Confidence: 1, Freshness: domain.FreshnessCurrent,
+		SourceRefs: []string{}, Tags: []string{"intake"}, CreatedAt: now, UpdatedAt: now, Revision: 1,
+	}
+	return s.store.CreateProject(ctx, domain.Snapshot{SchemaVersion: "1", Project: project, Entities: []domain.Entity{evidence}, Relations: []domain.Relation{}}, "user")
 }
 
 func (s *ProjectService) List(ctx context.Context, includeArchived bool) ([]domain.Project, error) {
@@ -78,6 +107,13 @@ func (s *ProjectService) Snapshot(ctx context.Context, projectID string) (domain
 
 func (s *ProjectService) Revisions(ctx context.Context, projectID string) ([]domain.ProjectRevision, error) {
 	return s.store.ListRevisions(ctx, projectID)
+}
+
+func (s *ProjectService) Events(ctx context.Context, projectID string, afterSequence int64, limit int) ([]domain.Event, error) {
+	if _, err := s.store.GetSnapshot(ctx, projectID); err != nil {
+		return nil, err
+	}
+	return s.store.ListEvents(ctx, projectID, afterSequence, limit)
 }
 
 func (s *ProjectService) Update(ctx context.Context, projectID string, input UpdateProjectInput) (domain.Snapshot, error) {
@@ -121,6 +157,47 @@ func (s *ProjectService) setStatus(ctx context.Context, projectID string, expect
 	return s.store.Transact(ctx, projectID, expectedRevision, "user", func(snapshot *domain.Snapshot) ([]EventDraft, error) {
 		snapshot.Project.Status = status
 		return []EventDraft{{Type: eventType, Payload: map[string]any{"status": status}}}, nil
+	})
+}
+
+func (s *ProjectService) ChangeStage(ctx context.Context, projectID string, expectedRevision int64, transition StageTransition) (domain.Snapshot, error) {
+	actor := strings.TrimSpace(transition.Actor)
+	if actor == "" {
+		actor = "workflow"
+	}
+	return s.store.Transact(ctx, projectID, expectedRevision, actor, func(snapshot *domain.Snapshot) ([]EventDraft, error) {
+		previous := snapshot.Project.Stage
+		if previous == transition.Next {
+			return nil, fmt.Errorf("%w: project is already at stage %s", domain.ErrInvalid, transition.Next)
+		}
+		now := s.store.Now()
+		if transition.Reopened {
+			for index := range snapshot.Entities {
+				entity := &snapshot.Entities[index]
+				if entity.Origin == domain.OriginAgent && entity.Freshness == domain.FreshnessCurrent && (entity.Status == domain.EntityProposed || entity.Status == domain.EntityConfirmed) {
+					entity.Freshness = domain.FreshnessPotentiallyStale
+					entity.Revision++
+					entity.UpdatedAt = now
+				}
+			}
+		}
+		snapshot.Project.Stage = transition.Next
+		gateChecks := transition.GateChecks
+		if gateChecks == nil {
+			gateChecks = []StageGateCheck{}
+		}
+		unresolved := transition.Unresolved
+		if unresolved == nil {
+			unresolved = []string{}
+		}
+		payload := map[string]any{
+			"previous": previous, "next": transition.Next, "gate_checks": gateChecks, "unresolved": unresolved,
+			"model_revision": expectedRevision + 1, "actor": actor, "reopened": transition.Reopened, "reason": strings.TrimSpace(transition.Reason),
+		}
+		if transition.ApprovalReference != "" {
+			payload["approval_reference"] = transition.ApprovalReference
+		}
+		return []EventDraft{{Type: "workflow.stage_changed", Payload: payload}}, nil
 	})
 }
 

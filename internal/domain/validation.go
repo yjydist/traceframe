@@ -78,7 +78,7 @@ var entitySchemas = map[EntityKind]entitySchema{
 		"statement": text(), "impact_if_false": enumeration("low", "medium", "high", "critical"), "validation_method": text(), "expires_at": text(), "owner": text(),
 	}),
 	KindQuestion: schema([]string{"prompt", "reason", "answer_type", "impact", "uncertainty", "irreversibility", "blocking"}, map[string]fieldRule{
-		"prompt": text(), "reason": text(), "answer_type": text(), "options": array(), "impact": number(1, 5), "uncertainty": number(1, 5), "irreversibility": number(1, 5), "blocking": boolean(), "answer": anyField(),
+		"prompt": text(), "reason": text(), "answer_type": text(), "options": array(), "impact": number(1, 5), "uncertainty": number(1, 5), "irreversibility": number(1, 5), "blocking": boolean(), "answer": anyField(), "disposition": enumeration("open", "answered", "deferred", "rejected"),
 	}),
 	KindTerm: schema([]string{"name", "definition", "aliases", "scope"}, map[string]fieldRule{
 		"name": text(), "definition": text(), "aliases": array(), "scope": text(), "source_ref": text(),

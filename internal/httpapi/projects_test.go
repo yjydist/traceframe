@@ -15,7 +15,10 @@ import (
 
 	"github.com/yjydist/traceframe/internal/application"
 	"github.com/yjydist/traceframe/internal/domain"
+	"github.com/yjydist/traceframe/internal/models"
+	"github.com/yjydist/traceframe/internal/orchestrator"
 	"github.com/yjydist/traceframe/internal/storage/sqlite"
+	"github.com/yjydist/traceframe/internal/workflow"
 )
 
 func TestProjectModelAPIWorkflow(t *testing.T) {
@@ -51,7 +54,7 @@ func TestProjectModelAPIWorkflow(t *testing.T) {
 	}
 	var snapshot domain.Snapshot
 	decodeResponse(t, commandResponse, &snapshot)
-	if snapshot.Project.Revision != 2 || len(snapshot.Entities) != 2 || len(snapshot.Relations) != 1 {
+	if snapshot.Project.Revision != 2 || len(snapshot.Entities) != 3 || len(snapshot.Relations) != 1 {
 		t.Fatalf("snapshot after commands = %#v", snapshot)
 	}
 
@@ -69,7 +72,7 @@ func TestProjectModelAPIWorkflow(t *testing.T) {
 
 	snapshotResponse := performJSON(t, handler, http.MethodGet, "/api/v1/projects/"+project.ID+"/snapshot", "")
 	decodeResponse(t, snapshotResponse, &snapshot)
-	if snapshot.Project.Revision != 2 || len(snapshot.Entities) != 2 {
+	if snapshot.Project.Revision != 2 || len(snapshot.Entities) != 3 {
 		t.Fatalf("invalid command set was not rolled back: %#v", snapshot)
 	}
 
@@ -95,7 +98,7 @@ func TestProjectModelAPIWorkflow(t *testing.T) {
 	traceResponse := performJSON(t, handler, http.MethodGet, "/api/v1/projects/"+project.ID+"/traceability", "")
 	var trace application.Traceability
 	decodeResponse(t, traceResponse, &trace)
-	if trace.ProjectRevision != 3 || len(trace.Nodes) != 2 || len(trace.Edges) != 1 || len(trace.Unlinked) != 0 {
+	if trace.ProjectRevision != 3 || len(trace.Nodes) != 3 || len(trace.Edges) != 1 || len(trace.Unlinked) != 1 {
 		t.Fatalf("traceability = %#v", trace)
 	}
 
@@ -174,7 +177,10 @@ func newProjectTestHandler(t *testing.T) (http.Handler, *sql.DB) {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	projects := application.NewProjectService(sqlite.NewRepository(db))
-	return New(db, projects, webDir, logger), db
+	runtimeStore := sqlite.NewRuntimeRepository(db)
+	runs := orchestrator.NewService(projects, runtimeStore, runtimeStore, models.UnconfiguredClient{}, logger)
+	workflowService := workflow.NewService(projects, sqlite.NewWorkflowRepository(db))
+	return New(db, projects, runs, workflowService, webDir, logger), db
 }
 
 func performJSON(t *testing.T, handler http.Handler, method, target, body string) *httptest.ResponseRecorder {

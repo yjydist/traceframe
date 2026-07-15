@@ -1,12 +1,16 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("TRACEFRAME_ADDR", "")
 	t.Setenv("TRACEFRAME_DATABASE_PATH", "test.db")
 	t.Setenv("TRACEFRAME_WEB_DIR", "web/dist")
 	t.Setenv("TRACEFRAME_LOG_LEVEL", "info")
+	t.Setenv("TRACEFRAME_MODEL_PROVIDER", "none")
 
 	_, err := Load()
 	if err == nil {
@@ -19,6 +23,7 @@ func TestLoadAcceptsLoopback(t *testing.T) {
 	t.Setenv("TRACEFRAME_DATABASE_PATH", ":memory:")
 	t.Setenv("TRACEFRAME_WEB_DIR", "web/dist")
 	t.Setenv("TRACEFRAME_LOG_LEVEL", "DEBUG")
+	t.Setenv("TRACEFRAME_MODEL_PROVIDER", "none")
 
 	cfg, err := Load()
 	if err != nil {
@@ -34,8 +39,33 @@ func TestLoadRejectsNonLoopback(t *testing.T) {
 	t.Setenv("TRACEFRAME_DATABASE_PATH", ":memory:")
 	t.Setenv("TRACEFRAME_WEB_DIR", "web/dist")
 	t.Setenv("TRACEFRAME_LOG_LEVEL", "info")
+	t.Setenv("TRACEFRAME_MODEL_PROVIDER", "none")
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() expected an error for a non-loopback address")
+	}
+}
+
+func TestLoadRejectsOpenAIWithoutAPIKey(t *testing.T) {
+	t.Setenv("TRACEFRAME_MODEL_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY is required") {
+		t.Fatalf("Load() error = %v, want missing API key error", err)
+	}
+}
+
+func TestLoadRejectsUnsupportedProviderWithoutExposingAPIKey(t *testing.T) {
+	const secret = "sk-test-secret-must-not-leak"
+	t.Setenv("TRACEFRAME_MODEL_PROVIDER", "unsupported")
+	t.Setenv("OPENAI_API_KEY", secret)
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "TRACEFRAME_MODEL_PROVIDER must be none or openai") {
+		t.Fatalf("Load() error = %v, want unsupported provider error", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("Load() error exposed API key: %v", err)
 	}
 }

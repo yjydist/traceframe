@@ -15,18 +15,26 @@ const (
 )
 
 type Config struct {
-	Address      string
-	DatabasePath string
-	WebDir       string
-	LogLevel     string
+	Address       string
+	DatabasePath  string
+	WebDir        string
+	LogLevel      string
+	ModelProvider string
+	OpenAIAPIKey  string
+	OpenAIModel   string
+	OpenAIBaseURL string
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		Address:      envOrDefault("TRACEFRAME_ADDR", defaultAddress),
-		DatabasePath: envOrDefault("TRACEFRAME_DATABASE_PATH", defaultDatabasePath),
-		WebDir:       envOrDefault("TRACEFRAME_WEB_DIR", defaultWebDir),
-		LogLevel:     strings.ToLower(envOrDefault("TRACEFRAME_LOG_LEVEL", defaultLogLevel)),
+		Address:       envOrDefault("TRACEFRAME_ADDR", defaultAddress),
+		DatabasePath:  envOrDefault("TRACEFRAME_DATABASE_PATH", defaultDatabasePath),
+		WebDir:        envOrDefault("TRACEFRAME_WEB_DIR", defaultWebDir),
+		LogLevel:      strings.ToLower(envOrDefault("TRACEFRAME_LOG_LEVEL", defaultLogLevel)),
+		ModelProvider: strings.ToLower(envOrDefault("TRACEFRAME_MODEL_PROVIDER", "none")),
+		OpenAIAPIKey:  strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
+		OpenAIModel:   envOrDefault("TRACEFRAME_OPENAI_MODEL", "gpt-5.6"),
+		OpenAIBaseURL: envOrDefault("TRACEFRAME_OPENAI_BASE_URL", "https://api.openai.com/v1"),
 	}
 
 	if err := validateLoopbackAddress(cfg.Address); err != nil {
@@ -40,6 +48,12 @@ func Load() (Config, error) {
 	}
 	if !validLogLevel(cfg.LogLevel) {
 		return Config{}, fmt.Errorf("TRACEFRAME_LOG_LEVEL must be debug, info, warn, or error")
+	}
+	if cfg.ModelProvider != "none" && cfg.ModelProvider != "openai" {
+		return Config{}, fmt.Errorf("TRACEFRAME_MODEL_PROVIDER must be none or openai")
+	}
+	if cfg.ModelProvider == "openai" && cfg.OpenAIAPIKey == "" {
+		return Config{}, fmt.Errorf("OPENAI_API_KEY is required when TRACEFRAME_MODEL_PROVIDER=openai")
 	}
 
 	return cfg, nil

@@ -21,7 +21,7 @@ type EventDraft struct {
 type Mutation func(snapshot *domain.Snapshot) ([]EventDraft, error)
 
 type ProjectStore interface {
-	CreateProject(ctx context.Context, project domain.Project, actor string) (domain.Snapshot, error)
+	CreateProject(ctx context.Context, snapshot domain.Snapshot, actor string) (domain.Snapshot, error)
 	DeleteProject(ctx context.Context, projectID string, expectedRevision int64) error
 	ListProjects(ctx context.Context, includeArchived bool) ([]domain.Project, error)
 	GetSnapshot(ctx context.Context, projectID string) (domain.Snapshot, error)

@@ -14,7 +14,11 @@ import (
 	"github.com/yjydist/traceframe/internal/config"
 	"github.com/yjydist/traceframe/internal/httpapi"
 	"github.com/yjydist/traceframe/internal/logging"
+	"github.com/yjydist/traceframe/internal/models"
+	openaiadapter "github.com/yjydist/traceframe/internal/models/openai"
+	"github.com/yjydist/traceframe/internal/orchestrator"
 	"github.com/yjydist/traceframe/internal/storage/sqlite"
+	"github.com/yjydist/traceframe/internal/workflow"
 )
 
 func main() {
@@ -43,10 +47,18 @@ func run() error {
 	defer db.Close()
 	repository := sqlite.NewRepository(db)
 	projects := application.NewProjectService(repository)
+	runtimeRepository := sqlite.NewRuntimeRepository(db)
+	var modelClient models.ModelClient = models.UnconfiguredClient{}
+	if cfg.ModelProvider == "openai" {
+		modelClient = openaiadapter.New(cfg.OpenAIAPIKey, cfg.OpenAIModel, cfg.OpenAIBaseURL, nil)
+	}
+	runs := orchestrator.NewService(projects, runtimeRepository, runtimeRepository, modelClient, logger)
+	workflowService := workflow.NewService(projects, sqlite.NewWorkflowRepository(db))
+	runs.Start(ctx)
 
 	server := &http.Server{
 		Addr:              cfg.Address,
-		Handler:           httpapi.New(db, projects, cfg.WebDir, logger),
+		Handler:           httpapi.New(db, projects, runs, workflowService, cfg.WebDir, logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

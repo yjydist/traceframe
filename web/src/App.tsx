@@ -10,9 +10,13 @@ import {
   Pencil,
   Search,
   Trash2,
+  HelpCircle,
+  ListChecks,
+  Play,
+  Ban,
   X,
 } from "lucide-react";
-import { FormEvent, ReactNode, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import {
   applyCommands,
@@ -21,9 +25,16 @@ import {
   deleteProject,
   getSnapshot,
   getTraceability,
+  getWorkflow,
   listProjects,
+  listQuestions,
+  listRuns,
+  respondToQuestion,
+  createRun,
+  cancelRun,
   updateProject,
   type Entity,
+  type AgentRun,
   type ProjectMode,
 } from "./api";
 
@@ -57,6 +68,10 @@ function AppShell({ children }: { children: ReactNode }) {
       <main className="workspace">{children}</main>
     </div>
   );
+}
+
+function ProjectTabs({ projectID, active }: { projectID: string; active: "model" | "questions" | "runs" }) {
+  return <nav className="project-tabs" aria-label="Project workspace"><Link className={active === "model" ? "active" : ""} to={`/projects/${projectID}/model`}><CircleDot size={16} />Model</Link><Link className={active === "questions" ? "active" : ""} to={`/projects/${projectID}/questions`}><HelpCircle size={16} />Questions</Link><Link className={active === "runs" ? "active" : ""} to={`/projects/${projectID}/runs`}><ListChecks size={16} />Runs</Link></nav>;
 }
 
 function ProjectList() {
@@ -146,6 +161,7 @@ function ModelView() {
       {snapshot.isPending ? <div className="loading-row">Loading project model...</div> : snapshot.isError ? <ErrorBanner message={snapshot.error.message} /> : (
         <>
           <Link className="back-link" to="/projects"><ArrowLeft size={16} />Projects</Link>
+          <ProjectTabs projectID={id} active="model" />
           <div className="model-heading">
             <div><p className="eyebrow">{snapshot.data.project.mode} / {snapshot.data.project.stage}</p><h1>{snapshot.data.project.name}</h1><p>{snapshot.data.project.raw_request}</p></div>
             <div className="model-actions"><span className="revision-badge">Revision {snapshot.data.project.revision}</span><button className="icon-button" type="button" title="Rename project" onClick={() => setDialog("rename")}><Pencil size={17} /></button><button className="icon-button" type="button" title="Archive project" onClick={async () => { await archiveProject(id, snapshot.data.project.revision); await queryClient.invalidateQueries({ queryKey: ["projects"] }); navigate("/projects"); }}><Archive size={17} /></button><button className="icon-button danger" type="button" title="Delete project" onClick={() => setDialog("delete")}><Trash2 size={17} /></button></div>
@@ -168,6 +184,44 @@ function ModelView() {
       )}
     </AppShell>
   );
+}
+
+function QuestionsView() {
+  const { id = "" } = useParams();
+  const queryClient = useQueryClient();
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const snapshot = useQuery({ queryKey: ["snapshot", id], queryFn: () => getSnapshot(id), enabled: id !== "" });
+  const questions = useQuery({ queryKey: ["questions", id], queryFn: () => listQuestions(id), enabled: id !== "" });
+  const workflow = useQuery({ queryKey: ["workflow", id], queryFn: () => getWorkflow(id), enabled: id !== "" });
+  const respond = useMutation({
+    mutationFn: ({ questionID, action }: { questionID: string; action: "answer" | "defer" | "reject" }) => respondToQuestion(id, questionID, snapshot.data!.project.revision, action, action === "answer" ? answers[questionID] : undefined),
+    onSuccess: async () => { await Promise.all([queryClient.invalidateQueries({ queryKey: ["snapshot", id] }), queryClient.invalidateQueries({ queryKey: ["questions", id] }), queryClient.invalidateQueries({ queryKey: ["workflow", id] })]); },
+  });
+  return <AppShell>{snapshot.isPending ? <div className="loading-row">Loading questions...</div> : snapshot.isError ? <ErrorBanner message={snapshot.error.message} /> : <><Link className="back-link" to="/projects"><ArrowLeft size={16} />Projects</Link><ProjectTabs projectID={id} active="questions" /><div className="model-heading"><div><p className="eyebrow">{snapshot.data.project.stage} / revision {snapshot.data.project.revision}</p><h1>Questions</h1><p>{snapshot.data.project.name}</p></div><span className="revision-badge">{workflow.data?.blockers.length ?? 0} blockers</span></div>{workflow.data && !workflow.data.gate_passed && <div className="gate-strip"><strong>Stage gate needs attention</strong><span>{workflow.data.blockers.join(", ")}</span></div>}{questions.isError && <ErrorBanner message={questions.error.message} />}{(questions.data?.questions.length ?? 0) === 0 ? <section className="empty-state"><div className="empty-icon"><HelpCircle size={28} /></div><h2>No pending questions</h2><p>The current question batch is clear.</p></section> : <div className="question-list">{questions.data?.questions.map((item) => <article className="question-item" key={item.entity.id}><div className="question-topline"><span>Priority {item.priority}</span>{item.blocking && <strong>Blocking</strong>}</div><h2>{String(item.entity.body.prompt)}</h2><p>{item.reason}</p><textarea rows={3} value={answers[item.entity.id] ?? ""} onChange={(event) => setAnswers((current) => ({ ...current, [item.entity.id]: event.target.value }))} placeholder="Answer" aria-label={`Answer ${item.entity.title}`} /><div className="question-actions"><button className="secondary-button" onClick={() => respond.mutate({ questionID: item.entity.id, action: "reject" })}>Reject</button><button className="secondary-button" onClick={() => respond.mutate({ questionID: item.entity.id, action: "defer" })}>Defer</button><button className="primary-button" disabled={!answers[item.entity.id]?.trim() || respond.isPending} onClick={() => respond.mutate({ questionID: item.entity.id, action: "answer" })}>Submit answer</button></div></article>)}</div>}{respond.isError && <ErrorBanner message={respond.error.message} />}</>}</AppShell>;
+}
+
+const terminalRunStates = new Set(["completed", "failed", "cancelled"]);
+
+function RunsView() {
+  const { id = "" } = useParams();
+  const queryClient = useQueryClient();
+  const [task, setTask] = useState("Identify the next framing gaps and propose only evidence-backed discovery entities");
+  const snapshot = useQuery({ queryKey: ["snapshot", id], queryFn: () => getSnapshot(id), enabled: id !== "" });
+  const runs = useQuery({ queryKey: ["runs", id], queryFn: () => listRuns(id), enabled: id !== "" });
+  useEffect(() => {
+    if (!id) return;
+    const events = new EventSource(`/api/v1/projects/${id}/events`);
+    const refresh = () => { void queryClient.invalidateQueries({ queryKey: ["runs", id] }); void queryClient.invalidateQueries({ queryKey: ["snapshot", id] }); };
+    events.addEventListener("run.state_changed", refresh);
+    events.addEventListener("run.cancelled", refresh);
+    events.addEventListener("run.failed", refresh);
+    events.addEventListener("run.completed", refresh);
+    events.addEventListener("project.revision_created", refresh);
+    return () => events.close();
+  }, [id, queryClient]);
+  const start = useMutation({ mutationFn: () => createRun(id, task), onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["runs", id] }); } });
+  const cancel = useMutation({ mutationFn: (runID: string) => cancelRun(id, runID), onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["runs", id] }); } });
+  return <AppShell>{snapshot.isPending ? <div className="loading-row">Loading runs...</div> : snapshot.isError ? <ErrorBanner message={snapshot.error.message} /> : <><Link className="back-link" to="/projects"><ArrowLeft size={16} />Projects</Link><ProjectTabs projectID={id} active="runs" /><div className="model-heading"><div><p className="eyebrow">{snapshot.data.project.stage} / revision {snapshot.data.project.revision}</p><h1>Agent runs</h1><p>{snapshot.data.project.name}</p></div></div><section className="run-launch"><label>Bounded discovery task<textarea rows={3} value={task} onChange={(event) => setTask(event.target.value)} /></label><button className="primary-button" disabled={!task.trim() || start.isPending} onClick={() => start.mutate()}><Play size={16} />{start.isPending ? "Queueing..." : "Run discovery"}</button></section>{start.isError && <ErrorBanner message={start.error.message} />}{runs.isError && <ErrorBanner message={runs.error.message} />}<div className="run-list">{runs.data?.runs.map((run: AgentRun) => <article className="run-row" key={run.id}><div className="run-state"><span className={`status-dot run-${run.state}`} /><strong>{run.state.replaceAll("_", " ")}</strong></div><div><h2>{run.task}</h2><code>{run.id}</code>{run.error_message && <p className="run-error">{run.error_message}</p>}</div><div className="run-usage"><span>{run.role}</span><span>{run.usage.model_turns} turns</span><span>{run.usage.input_tokens + run.usage.output_tokens} tokens</span></div>{!terminalRunStates.has(run.state) && <button className="icon-button danger" title="Cancel run" onClick={() => cancel.mutate(run.id)}><Ban size={17} /></button>}</article>)}</div>{(runs.data?.runs.length ?? 0) === 0 && <div className="section-empty">No runs yet.</div>}</>}</AppShell>;
 }
 
 const entityKinds = ["goal", "stakeholder", "context", "scope_item", "constraint", "assumption", "question", "term", "scenario", "requirement", "quality_scenario", "risk", "option", "decision", "system_element", "work_slice", "experiment", "evidence", "verification"];
@@ -236,5 +290,5 @@ function DialogActions({ onClose, pending, label }: { onClose: () => void; pendi
 function ErrorBanner({ message }: { message: string }) { return <div className="error-banner" role="alert">{message}</div>; }
 
 export function App() {
-  return <Routes><Route path="/projects" element={<ProjectList />} /><Route path="/projects/:id/model" element={<ModelView />} /><Route path="*" element={<Navigate to="/projects" replace />} /></Routes>;
+  return <Routes><Route path="/projects" element={<ProjectList />} /><Route path="/projects/:id/model" element={<ModelView />} /><Route path="/projects/:id/questions" element={<QuestionsView />} /><Route path="/projects/:id/runs" element={<RunsView />} /><Route path="*" element={<Navigate to="/projects" replace />} /></Routes>;
 }
