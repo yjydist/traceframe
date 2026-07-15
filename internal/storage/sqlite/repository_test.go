@@ -29,7 +29,7 @@ func TestRepositoryPersistsAtomicVersionedProjectModel(t *testing.T) {
 		Status: domain.ProjectActive, Revision: 1, CreatedAt: createdAt, UpdatedAt: createdAt,
 	}
 
-	snapshot, err := repository.CreateProject(ctx, project, "user")
+	snapshot, err := repository.CreateProject(ctx, domain.Snapshot{SchemaVersion: "1", Project: project}, "user")
 	if err != nil {
 		t.Fatalf("CreateProject() error = %v", err)
 	}
@@ -112,7 +112,7 @@ func TestRepositoryRejectsConflictAndRollsBackInvalidMutation(t *testing.T) {
 	repository := NewRepository(db)
 	repository.now = func() time.Time { return now }
 	project := domain.Project{ID: "prj_atomic", Name: "Atomic", RawRequest: "Test atomic changes", Mode: domain.ModeSpike, OutputLanguage: "en", Stage: domain.StageIntake, Status: domain.ProjectActive, Revision: 1, CreatedAt: now, UpdatedAt: now}
-	if _, err := repository.CreateProject(ctx, project, "user"); err != nil {
+	if _, err := repository.CreateProject(ctx, domain.Snapshot{SchemaVersion: "1", Project: project}, "user"); err != nil {
 		t.Fatalf("CreateProject() error = %v", err)
 	}
 

@@ -29,11 +29,20 @@ func (r *Repository) Now() time.Time {
 	return r.now().UTC()
 }
 
-func (r *Repository) CreateProject(ctx context.Context, project domain.Project, actor string) (domain.Snapshot, error) {
-	if err := domain.ValidateProject(project); err != nil {
+func (r *Repository) CreateProject(ctx context.Context, snapshot domain.Snapshot, actor string) (domain.Snapshot, error) {
+	if snapshot.SchemaVersion == "" {
+		snapshot.SchemaVersion = "1"
+	}
+	if snapshot.Entities == nil {
+		snapshot.Entities = []domain.Entity{}
+	}
+	if snapshot.Relations == nil {
+		snapshot.Relations = []domain.Relation{}
+	}
+	if err := validateSnapshot(snapshot); err != nil {
 		return domain.Snapshot{}, err
 	}
-	snapshot := domain.Snapshot{SchemaVersion: "1", Project: project, Entities: []domain.Entity{}, Relations: []domain.Relation{}}
+	project := snapshot.Project
 	snapshotBytes, checksum, err := encodeSnapshot(snapshot)
 	if err != nil {
 		return domain.Snapshot{}, err
@@ -61,6 +70,13 @@ func (r *Repository) CreateProject(ctx context.Context, project domain.Project, 
 		return domain.Snapshot{}, fmt.Errorf("insert project: %w", err)
 	}
 	if err := insertRevision(ctx, tx, project.ID, project.Revision, checksum, snapshotBytes, actor, project.CreatedAt); err != nil {
+		return domain.Snapshot{}, err
+	}
+	empty := domain.Snapshot{SchemaVersion: snapshot.SchemaVersion, Project: project, Entities: []domain.Entity{}, Relations: []domain.Relation{}}
+	if err := persistEntities(ctx, tx, empty, snapshot); err != nil {
+		return domain.Snapshot{}, err
+	}
+	if err := persistRelations(ctx, tx, empty, snapshot); err != nil {
 		return domain.Snapshot{}, err
 	}
 	if err := insertEvent(ctx, tx, project.ID, "project.revision_created", map[string]any{"revision": project.Revision, "checksum": checksum}, project.CreatedAt); err != nil {
